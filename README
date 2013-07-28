@@ -1,0 +1,10 @@
+C++11 ↔ Lua bindings generator. Based on the API of LuaBridge
+(https://github.com/vinniefalco/LuaBridge).
+
+It's still in development, the core is written, but there are a couple of
+things I'm still working on:
+ - Tests coverage is less than desirable.
+ - Documentation is missing.
+
+Hopefully it will be complete in month or two. If you read this, then it's not
+ready yet. This message will be removed as soon as I'm done with it.

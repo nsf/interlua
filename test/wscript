@@ -1,0 +1,15 @@
+def build(bld):
+	tests = bld.path.ant_glob("*.cc")
+	for t in tests:
+		bld.program(
+			features = 'test',
+			source = [t],
+			target = 'test_' + t.name[:-3],
+			includes = '..',
+			install_path = None,
+			use = 'LUA interlua',
+		)
+
+	from waflib.Tools import waf_unit_test
+	bld.add_post_fun(waf_unit_test.summary)
+	bld.add_post_fun(waf_unit_test.set_exit_code)
