@@ -941,6 +941,11 @@ static inline NSWrapper GlobalNamespace(lua_State *L) {
 	return {L, true};
 }
 
+static inline NSWrapper NewNamespace(lua_State *L) {
+	lua_newtable(L);
+	return {L};
+}
+
 //============================================================================
 // Ref
 //============================================================================
