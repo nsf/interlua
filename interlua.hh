@@ -3,6 +3,7 @@
 #include <lua.hpp>
 #include <type_traits>
 #include <utility>
+#include <new>
 
 namespace InterLua {
 
