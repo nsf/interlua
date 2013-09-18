@@ -158,14 +158,12 @@ struct StackOps<T*> {
 	}
 };
 
-
 template <>
 struct StackOps<lua_State*> {
 	static inline lua_State *Get(lua_State *L, int) {
 		return L;
 	}
 };
-
 
 #define _stack_ops_integer(TT, T)				\
 template <>							\

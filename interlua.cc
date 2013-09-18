@@ -226,7 +226,26 @@ NSWrapper NSWrapper::Namespace(const char *name) {
 
 Userdata::~Userdata() {}
 
+// expects two metatables on the stack (see get_userdata function):
+//  -1 'absidx' metatable
+//  -2 'base_class_key' metatable
+// and formats a nice error message for these (even if 'absidx' mt is nil)
+static void get_userdata_error(lua_State *L, int absidx, int idx, const char *str) {
+	const char *expected, *got;
+	rawgetfield(L, -2, "__type");
+	expected = lua_tostring(L, -1);
+	if (lua_isnil(L, -2)) {
+		got = lua_typename(L, lua_type(L, absidx));
+	} else {
+		rawgetfield(L, -2, "__type");
+		got = lua_tostring(L, -1);
+	}
+	const char *msg = lua_pushfstring(L, str, expected, got);
+	luaL_argerror(L, idx, msg);
+}
+
 Userdata *get_userdata(lua_State *L, int idx, void *base_class_key, bool can_be_const) {
+	luaL_checkany(L, idx);
 	int absidx = lua_absindex(L, idx);
 	lua_rawgetp(L, LUA_REGISTRYINDEX, base_class_key); // class metatable
 	if (lua_isnil(L, -1)) {
@@ -236,7 +255,13 @@ Userdata *get_userdata(lua_State *L, int idx, void *base_class_key, bool can_be_
 	}
 
 	// get the metatable of the 'absidx' arg
-	lua_getmetatable(L, absidx);
+	if (!lua_getmetatable(L, absidx)) {
+		// no metatable, no match
+		lua_pushnil(L);
+		get_userdata_error(L, absidx, idx,
+			"type mismatch, \"%s\" expected, got \"%s\" instead");
+		return nullptr;
+	}
 
 	// let's see if this metatable is a const table, in case if it has
 	// "__const", it's not
@@ -247,7 +272,8 @@ Userdata *get_userdata(lua_State *L, int idx, void *base_class_key, bool can_be_
 	if (is_const && !can_be_const) {
 		// if the userdata is const and we need a mutable one, that's
 		// an error
-		luaL_argerror(L, idx, "mutable class required, got const");
+		get_userdata_error(L, absidx, idx,
+			"mutable class \"%s\" required, got \"%s\" instead");
 		return nullptr;
 	}
 
@@ -273,8 +299,12 @@ Userdata *get_userdata(lua_State *L, int idx, void *base_class_key, bool can_be_
 		// no match, let's try the parent
 		rawgetfield(L, -1, "__parent");
 		if (lua_isnil(L, -1)) {
-			// no parent, means no match
-			luaL_argerror(L, idx, "class mismatch");
+			// no parent, means no match, cleanup the mess and get
+			// back the original 'absidx' metatable
+			lua_pop(L, 2);
+			lua_getmetatable(L, absidx);
+			get_userdata_error(L, absidx, idx,
+				"type mismatch, \"%s\" expected, got \"%s\" instead");
 			return nullptr;
 		}
 		lua_remove(L, -2); // remove the child metatable

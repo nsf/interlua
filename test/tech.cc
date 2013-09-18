@@ -118,29 +118,62 @@ struct BaseClass {
 struct DerivedClass : BaseClass {
 	int get_value() override { return 2; }
 
-	static DerivedClass new_mutable() {
-		return {};
-	}
-
-	static const DerivedClass new_const() {
+	static DerivedClass new_inst() {
 		return {};
 	}
 };
 
+struct AnotherClass {
+	int x;
+	static AnotherClass new_inst() {
+		return {6};
+	}
+};
+
 void test_get_userdata(int n, lua_State *L) {
-	DerivedClass d;
 	using namespace InterLua;
+
+	DerivedClass d;
+	AnotherClass a = {5};
+
 	switch (n) {
 	case 1:
+		// expect "unregistered base class"
 		get_userdata(L, -1, ClassKey<NotRegistered>::Class(), true);
 		break;
 	case 2:
+		// expect "mutable class required"
 		StackOps<const DerivedClass*>::Push(L, &d);
 		get_userdata(L, -1, ClassKey<BaseClass>::Class(), false);
+		break;
+	case 3:
+		// ok
+		StackOps<const DerivedClass*>::Push(L, &d);
+		get_userdata(L, -1, ClassKey<BaseClass>::Class(), true);
+		break;
+	case 4:
+		// expect "class mismatch"
+		StackOps<const AnotherClass&>::Push(L, a);
+		get_userdata(L, -1, ClassKey<BaseClass>::Class(), true);
 		break;
 	default:
 		break;
 	}
+}
+
+void test_BaseClass(BaseClass *x) {
+}
+
+InterLua::Ref to_const(InterLua::Ref r, lua_State *L) {
+	r.Push(L);
+	if (!lua_getmetatable(L, -1)) {
+		return r;
+	}
+	InterLua::rawgetfield(L, -1, "__const");
+	if (!lua_isnil(L, -1)) {
+		lua_setmetatable(L, -3);
+	}
+	return r;
 }
 
 // Userdata *get_userdata(lua_State *L, int index, void *base_class_key, bool can_be_const)
@@ -153,8 +186,15 @@ STF_TEST("get_userdata") {
 		End().
 		DerivedClass<DerivedClass, BaseClass>("Derived").
 			Function("get_value", &DerivedClass::get_value).
+			StaticFunction("new", &DerivedClass::new_inst).
+		End().
+		Class<AnotherClass>("Another").
+			Variable("x", &AnotherClass::x).
+			StaticFunction("new", &AnotherClass::new_inst).
 		End().
 		Function("test_get_userdata", &test_get_userdata).
+		Function("test_BaseClass", &test_BaseClass).
+		Function("to_const", &to_const).
 	End();
 	const char *init = R"*****(
 		function pcall_expect(expect, f, ...)
@@ -164,12 +204,19 @@ STF_TEST("get_userdata") {
 		end
 		pcall_expect("unregistered base class",
 			test_get_userdata, 1)
-		pcall_expect("mutable class required",
+		pcall_expect("mutable class \".-\" required",
 			test_get_userdata, 2)
 		test_get_userdata(3)
-		test_get_userdata(4)
-		test_get_userdata(5)
-		test_get_userdata(6)
+		pcall_expect("type mismatch",
+			test_get_userdata, 4)
+		pcall_expect("type mismatch",
+			test_BaseClass, 5)
+		pcall_expect("type mismatch",
+			test_BaseClass, Another.new())
+		test_BaseClass(Derived.new())
+		pcall_expect("mutable class \".-\" required",
+			test_BaseClass, to_const(Derived.new()))
+		-- TODO: test_BaseClass("123")
 	)*****";
 	DO(init);
 	END();
