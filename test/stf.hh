@@ -29,11 +29,24 @@ static stf::name_setter _MCC(_name_setter_, __LINE__)(_stf_runner, name);
 
 #define STF_PRINTF(...) __T.printf(__LINE__, __FILE__, __VA_ARGS__)
 #define STF_RAW_PRINTF(...) __T.printf(0, nullptr, __VA_ARGS__)
+#define STF_ERROR() __T.status = false
+#define STF_FAIL()										\
+do {												\
+	__T.status = false;									\
+	return;											\
+} while (0)
 #define STF_ERRORF(...)										\
 do {												\
 	__T.printf(__LINE__, __FILE__, __VA_ARGS__);						\
 	__T.status = false;									\
 } while (0)
+#define STF_FAILF(...)										\
+do {												\
+	__T.printf(__LINE__, __FILE__, __VA_ARGS__);						\
+	__T.status = false;									\
+	return;											\
+} while (0)
+
 
 #define STF_ASSERT(expr)									\
 do {												\
@@ -115,8 +128,9 @@ struct runner {
 
 	int run() {
 		auto start = std::chrono::system_clock::now();
+		logf("=== %s\n", suite_name.c_str());
 		for (auto &t: tests) {
-			logf("%s... ", t.name.c_str());
+			logf("--- %s: ", t.name.c_str());
 			(*t.func)(t);
 			if (t.status) {
 				logf("PASS\n");
@@ -125,11 +139,11 @@ struct runner {
 				if (verbose) {
 					logf("FAIL\n");
 				} else {
-					logf_force("%s... FAIL\n", t.name.c_str());
+					logf_force("--- %s: FAIL\n", t.name.c_str());
 				}
 
 				for (auto const &msg: t.messages) {
-					logf_force("  %s\n", msg.c_str());
+					logf_force("%s\n", msg.c_str());
 				}
 			}
 		}
@@ -139,14 +153,14 @@ struct runner {
 		auto s_part = ms / 1000;
 		auto ms_part = ms - s_part * 1000;
 		if (failed > 0) {
-			logf("%d out of %d test(s) failed", failed, tests.size());
+			logf("### %d out of %d test(s) failed\n", failed, tests.size());
 		}
 
 		if (failed > 0) {
-			logf_force("FAIL\t%s\t%d.%03ds\n", suite_name.c_str(), s_part, ms_part);
+			logf_force("FAIL %s (%d.%03ds)\n", suite_name.c_str(), s_part, ms_part);
 			return 1;
 		} else {
-			logf_force("ok\t%s\t%d.%03ds\n", suite_name.c_str(), s_part, ms_part);
+			logf_force("PASS %s (%d.%03ds)\n", suite_name.c_str(), s_part, ms_part);
 			return 0;
 		}
 	}

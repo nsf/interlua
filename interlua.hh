@@ -14,12 +14,15 @@ namespace InterLua {
 void die(const char *str, ...);
 void stack_dump(lua_State *L);
 
+// pushes t[key] onto the stack, where t is the table at the given index
 static inline void rawgetfield(lua_State *L, int index, const char *key) {
 	index = lua_absindex(L, index);
 	lua_pushstring(L, key);
 	lua_rawget(L, index);
 }
 
+// does t[key] = v, where t is the table at the given index and v is the value
+// at the top of the stack, pops the value from the stack
 static inline void rawsetfield(lua_State *L, int index, const char *key) {
 	index = lua_absindex(L, index);
 	lua_pushstring(L, key);
@@ -109,7 +112,19 @@ struct StackOps {
 
 	static inline void Push(lua_State *L, T &&value) {
 		void *mem = lua_newuserdata(L, sizeof(UserdataValue<PURE_T>));
+
+		// We pass Class() key here, because passing an argument via
+		// C++ reference always makes a copy in Lua. The reason for
+		// this is because semantically in C++ you can't see the
+		// difference between T and T& and we need to leave a
+		// reasonable way of making copies when passing values to Lua.
+		// Hence, the decision is to always copy ref values, but pass
+		// pointers directly as UserdataPointer and respect the
+		// constness.
 		lua_rawgetp(L, LUA_REGISTRYINDEX, ClassKey<PURE_T>::Class());
+		if (lua_isnil(L, -1)) {
+			die("pushing an unregistered class onto the lua stack");
+		}
 		lua_setmetatable(L, -2);
 		new (mem) UserdataValue<PURE_T>(std::forward<T>(value));
 	}
@@ -131,6 +146,9 @@ struct StackOps<T*> {
 			ClassKey<PURE_T>::Const() :
 			ClassKey<PURE_T>::Class();
 		lua_rawgetp(L, LUA_REGISTRYINDEX, mt);
+		if (lua_isnil(L, -1)) {
+			die("pushing an unregistered class onto the lua stack");
+		}
 		lua_setmetatable(L, -2);
 		new (mem) UserdataPointer<T>(value);
 	}
@@ -161,23 +179,31 @@ struct StackOps<TT> {						\
 };
 
 _stack_ops_integer(signed char, signed char)
+_stack_ops_integer(signed char&, signed char)
 _stack_ops_integer(const signed char&, signed char)
 _stack_ops_integer(unsigned char, unsigned char)
+_stack_ops_integer(unsigned char&, unsigned char)
 _stack_ops_integer(const unsigned char&, unsigned char)
 
 _stack_ops_integer(short, short)
+_stack_ops_integer(short&, short)
 _stack_ops_integer(const short&, short)
 _stack_ops_integer(unsigned short, unsigned short)
+_stack_ops_integer(unsigned short&, unsigned short)
 _stack_ops_integer(const unsigned short&, unsigned short)
 
 _stack_ops_integer(int, int)
+_stack_ops_integer(int&, int)
 _stack_ops_integer(const int&, int)
 _stack_ops_integer(unsigned int, unsigned int)
+_stack_ops_integer(unsigned int&, unsigned int)
 _stack_ops_integer(const unsigned int&, unsigned int)
 
 _stack_ops_integer(long, long)
+_stack_ops_integer(long&, long)
 _stack_ops_integer(const long&, long)
 _stack_ops_integer(unsigned long, unsigned long)
+_stack_ops_integer(unsigned long&, unsigned long)
 _stack_ops_integer(const unsigned long&, unsigned long)
 
 #undef _stack_ops_integer
@@ -195,8 +221,10 @@ struct StackOps<TT> {						\
 };
 
 _stack_ops_float(float, float)
+_stack_ops_float(float&, float)
 _stack_ops_float(const float&, float)
 _stack_ops_float(double, double)
+_stack_ops_float(double&, double)
 _stack_ops_float(const double&, double)
 
 #undef _stack_ops_float
@@ -232,6 +260,7 @@ struct StackOps<T> {						\
 };
 
 _stack_ops_char(char)
+_stack_ops_char(char&)
 _stack_ops_char(const char&)
 
 #undef _stack_ops_char
@@ -248,6 +277,7 @@ struct StackOps<T> {						\
 };
 
 _stack_ops_bool(bool)
+_stack_ops_bool(bool&)
 _stack_ops_bool(const bool&)
 
 #undef _stack_ops_bool
@@ -1161,6 +1191,7 @@ struct StackOps<T> {						\
 };
 
 _stack_ops_ref(Ref)
+_stack_ops_ref(Ref&)
 _stack_ops_ref(const Ref&)
 
 #undef _stack_ops_ref

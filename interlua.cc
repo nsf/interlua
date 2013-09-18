@@ -35,10 +35,10 @@ void stack_dump(lua_State *L) {
             printf("other: %s", lua_typename(L, t));
             break;
         }
-        printf("  ");  /* put a separator */
+        printf(" | ");  /* put a separator */
       }
       printf("\n");  /* end the listing */
-      printf("-------------\n");
+      printf("----------------------------\n");
 }
 
 int read_only_error(lua_State *L) {
@@ -277,6 +277,7 @@ Userdata *get_userdata(lua_State *L, int idx, void *base_class_key, bool can_be_
 			luaL_argerror(L, idx, "class mismatch");
 			return nullptr;
 		}
+		lua_remove(L, -2); // remove the child metatable
 	}
 }
 
