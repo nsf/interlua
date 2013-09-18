@@ -1132,9 +1132,9 @@ public:
 	inline bool IsLightUserdata() const { return Type() == LUA_TLIGHTUSERDATA; }
 
 	template <typename T>
-	void Append(T v) const {
+	void Append(T &&v) const {
 		Push(L);
-		StackOps<T>::Push(L, v);
+		StackOps<T>::Push(L, std::forward<T>(v));
 		luaL_ref(L, -2);
 		lua_pop(L, 1);
 	}
