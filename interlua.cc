@@ -162,43 +162,34 @@ void create_class_tables(lua_State *L, const char *name) {
 	// lua_pushnil(L);
 	// rawsetfield(L, -2, "__metatable");
 
+	// -- const table --
 
-	// ----------------------------- const table
-	// create a table and make it a metatable of itself
 	lua_newtable(L);
-	lua_pushvalue(L, -1);
-	lua_setmetatable(L, -2);
-
-	char tmp[1024];
-	snprintf(tmp, sizeof(tmp), "const %s", name);
-	tmp[sizeof(tmp)-1] = 0;
-	lua_pushstring(L, tmp);
+	lua_pushfstring(L, "const %s", name);
 	rawsetfield(L, -2, "__type");
-
 	set_common_metamethods(L, index_meta_method, class_newindex_meta_method);
 
-	// ----------------------------- class table
-	// create a table and make it a metatable of itself
-	lua_newtable(L);
-	lua_pushvalue(L, -1);
-	lua_setmetatable(L, -2);
+	// -- class table --
 
+	lua_newtable(L);
 	lua_pushstring(L, name);
 	rawsetfield(L, -2, "__type");
-
 	set_common_metamethods(L, index_meta_method, class_newindex_meta_method);
 
+	// a pointer to the const table, mutable value can become a const value
 	lua_pushvalue(L, -2);
 	rawsetfield(L, -2, "__const");
 
-	// ----------------------------- static table
-	// create a table and make it a metatable of itself
+	// -- static table --
+
 	lua_newtable(L);
 	lua_pushvalue(L, -1);
 	lua_setmetatable(L, -2);
-
 	set_common_metamethods(L, index_meta_method, newindex_meta_method);
 
+	// a pointer to the class table, we need this in Class registration
+	// function to reuse the tables in case if the same class is being
+	// registered twice
 	lua_pushvalue(L, -2);
 	rawsetfield(L, -2, "__class");
 }

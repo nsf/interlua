@@ -69,13 +69,11 @@ STF_TEST("create_class_tables") {
 			assert(static.__newindex ~= nil)
 			assert(static.__class ~= nil)
 			class = static.__class
-			assert(class == getmetatable(class))
 			assert(class.__type == "Dummy")
 			assert(class.__index ~= nil)
 			assert(class.__newindex ~= nil)
 			assert(class.__const ~= nil)
 			const = class.__const
-			assert(const == getmetatable(const))
 			assert(const.__type == "const Dummy")
 			assert(const.__index ~= nil)
 			assert(const.__newindex ~= nil)

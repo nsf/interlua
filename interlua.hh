@@ -31,6 +31,7 @@ static inline void rawsetfield(lua_State *L, int index, const char *key) {
 	lua_rawset(L, index);
 }
 
+// RAII helper for popping things from the lua stack
 class stack_pop {
 	lua_State *L;
 	int count;
