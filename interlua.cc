@@ -322,7 +322,7 @@ Userdata *get_userdata(lua_State *L, int idx, void *base_class_key, bool can_be_
 			lua_pop(L, 2);
 			lua_getmetatable(L, absidx);
 			get_userdata_error(L, absidx, idx,
-				"type mismatch, \"%s\" expected, got \"%s\" instead");
+				"class mismatch, \"%s\" expected, got \"%s\" instead");
 			return nullptr;
 		}
 		lua_remove(L, -2); // remove the child metatable
