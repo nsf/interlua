@@ -161,19 +161,26 @@ void test_get_userdata(int n, lua_State *L) {
 	}
 }
 
-void test_BaseClass(BaseClass *x) {
+void test_BaseClass(BaseClass*) {
 }
 
 InterLua::Ref to_const(InterLua::Ref r, lua_State *L) {
 	r.Push(L);
-	if (!lua_getmetatable(L, -1)) {
+	auto ud = InterLua::get_userdata_typeless(L, -1);
+	if (!ud)
 		return r;
-	}
+	ud->SetConst(true);
+	if (!lua_getmetatable(L, -1))
+		return r;
 	InterLua::rawgetfield(L, -1, "__const");
-	if (!lua_isnil(L, -1)) {
+	if (!lua_isnil(L, -1))
 		lua_setmetatable(L, -3);
-	}
 	return r;
+}
+
+int new_userdata_garbage(lua_State *L) {
+	lua_newuserdata(L, sizeof(int));
+	return 1;
 }
 
 // Userdata *get_userdata(lua_State *L, int index, void *base_class_key, bool can_be_const)
@@ -195,12 +202,14 @@ STF_TEST("get_userdata") {
 		Function("test_get_userdata", &test_get_userdata).
 		Function("test_BaseClass", &test_BaseClass).
 		Function("to_const", &to_const).
+		CFunction("new_userdata_garbage", &new_userdata_garbage).
 	End();
 	const char *init = R"*****(
 		function pcall_expect(expect, f, ...)
 			local ok, err = pcall(f, ...)
 			assert(not ok)
-			assert(err:find(expect) ~= nil)
+			assert(err:find(expect) ~= nil,
+				"expected: [" .. expect .. "], got: [" .. err .. "]")
 		end
 		pcall_expect("unregistered base class",
 			test_get_userdata, 1)
@@ -209,14 +218,17 @@ STF_TEST("get_userdata") {
 		test_get_userdata(3)
 		pcall_expect("type mismatch",
 			test_get_userdata, 4)
-		pcall_expect("type mismatch",
+		pcall_expect("not userdata",
 			test_BaseClass, 5)
+		pcall_expect("not userdata",
+			test_BaseClass, "123")
 		pcall_expect("type mismatch",
 			test_BaseClass, Another.new())
 		test_BaseClass(Derived.new())
 		pcall_expect("mutable class \".-\" required",
 			test_BaseClass, to_const(Derived.new()))
-		-- TODO: test_BaseClass("123")
+		pcall_expect("foreign userdata",
+			test_BaseClass, new_userdata_garbage())
 	)*****";
 	DO(init);
 	END();

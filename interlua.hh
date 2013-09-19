@@ -4,6 +4,7 @@
 #include <type_traits>
 #include <utility>
 #include <new>
+#include <cstdint>
 
 namespace InterLua {
 
@@ -56,8 +57,18 @@ struct ClassKey {
 // Userdata
 //============================================================================
 
+constexpr uint32_t UserdataMagic = 0xA3867EF0;
+
 class Userdata {
+	// also contains a constness flag
+	uint32_t magic;
+
 public:
+	Userdata(bool constness): magic(UserdataMagic | (uint32_t)constness) {}
+	bool IsValid() const { return (magic & 0xFFFFFFF0) == UserdataMagic; }
+	bool IsConst() const { return (magic & 0x0000000F); }
+	void SetConst(bool constness) { magic = UserdataMagic | (uint32_t)constness; }
+
 	virtual ~Userdata();
 	virtual void *Data() = 0;
 };
@@ -68,7 +79,8 @@ class UserdataValue : public Userdata {
 
 public:
 	template <typename ...Args>
-	UserdataValue(Args &&...args): value(std::forward<Args>(args)...) {}
+	UserdataValue(bool constness, Args &&...args):
+		Userdata(constness), value(std::forward<Args>(args)...) {}
 	virtual void *Data() override { return (void*)&value; }
 };
 
@@ -77,10 +89,12 @@ class UserdataPointer : public Userdata {
 	T *ptr;
 
 public:
-	UserdataPointer(T *ptr): ptr(ptr) {}
+	UserdataPointer(bool constness, T *ptr):
+		Userdata(constness), ptr(ptr) {}
 	virtual void *Data() override { return (void*)ptr; }
 };
 
+Userdata *get_userdata_typeless(lua_State *L, int index);
 Userdata *get_userdata(lua_State *L, int index, void *base_class_key, bool can_be_const);
 Userdata *get_userdata_unchecked(lua_State *L, int index);
 
@@ -126,7 +140,7 @@ struct StackOps {
 			die("pushing an unregistered class onto the lua stack");
 		}
 		lua_setmetatable(L, -2);
-		new (mem) UserdataValue<PURE_T>(std::forward<T>(value));
+		new (mem) UserdataValue<PURE_T>(false, std::forward<T>(value));
 	}
 
 	static inline T Get(lua_State *L, int index) {
@@ -150,7 +164,7 @@ struct StackOps<T*> {
 			die("pushing an unregistered class onto the lua stack");
 		}
 		lua_setmetatable(L, -2);
-		new (mem) UserdataPointer<T>(value);
+		new (mem) UserdataPointer<T>(std::is_const<T>::value, value);
 	}
 	static inline T *Get(lua_State *L, int index) {
 		// the class cannot be const, when T isn't const
@@ -393,7 +407,7 @@ struct func_traits<R (Args...), index_tuple_type<I...>> {
 
 	static void construct(lua_State *L, void *mem) {
 		(void)L; // silence notused warning for cases with no arguments
-		new (mem) UserdataValue<R>(StackOps<Args>::Get(L, I+2)...);
+		new (mem) UserdataValue<R>(false, StackOps<Args>::Get(L, I+2)...);
 	}
 };
 
@@ -454,7 +468,7 @@ template <typename T, typename R, typename ...Args>
 struct call<R (T::*)(Args...)> {
 	static int cfunction(lua_State *L) {
 		typedef R (T::*FP)(Args...);
-		T *cls = get_class_unchecked<T>(L, 1);
+		T *cls = get_class<T>(L, 1, false);
 		auto fp = *(FP*)lua_touserdata(L, lua_upvalueindex(1));
 		StackOps<R>::Push(L,
 			func_traits<R (T::*)(Args...), index_tuple<sizeof...(Args)>>::
@@ -469,7 +483,7 @@ template <typename T, typename ...Args>
 struct call<void (T::*)(Args...)> {
 	static int cfunction(lua_State *L) {
 		typedef void (T::*FP)(Args...);
-		T *cls = get_class_unchecked<T>(L, 1);
+		T *cls = get_class<T>(L, 1, false);
 		auto fp = *(FP*)lua_touserdata(L, lua_upvalueindex(1));
 		func_traits<void (T::*)(Args...), index_tuple<sizeof...(Args)>>::
 			call(L, cls, fp);
@@ -482,7 +496,7 @@ template <typename T, typename R, typename ...Args>
 struct call<R (T::*)(Args...) const> {
 	static int cfunction(lua_State *L) {
 		typedef R (T::*FP)(Args...) const;
-		const T *cls = get_class_unchecked<T>(L, 1);
+		const T *cls = get_class<T>(L, 1, true);
 		auto fp = *(FP*)lua_touserdata(L, lua_upvalueindex(1));
 		StackOps<R>::Push(L,
 			func_traits<R (T::*)(Args...) const, index_tuple<sizeof...(Args)>>::
@@ -497,7 +511,7 @@ template <typename T, typename ...Args>
 struct call<void (T::*)(Args...) const> {
 	static int cfunction(lua_State *L) {
 		typedef void (T::*FP)(Args...) const;
-		T *cls = get_class_unchecked<T>(L, 1);
+		T *cls = get_class<T>(L, 1, true);
 		auto fp = *(FP*)lua_touserdata(L, lua_upvalueindex(1));
 		func_traits<void (T::*)(Args...) const, index_tuple<sizeof...(Args)>>::
 			call(L, cls, fp);
@@ -524,7 +538,7 @@ template <typename T>
 struct member_cfunction<int (T::*)(lua_State*)> {
 	static int cfunction(lua_State *L) {
 		typedef int (T::*FP)(lua_State*);
-		T *cls = get_class_unchecked<T>(L, 1);
+		T *cls = get_class<T>(L, 1, false);
 		auto fp = *(FP*)lua_touserdata(L, lua_upvalueindex(1));
 		return (cls->*fp)(L);
 	}
@@ -534,7 +548,7 @@ template <typename T>
 struct member_cfunction<int (T::*)(lua_State*) const> {
 	static int cfunction(lua_State *L) {
 		typedef int (T::*FP)(lua_State*) const;
-		const T *cls = get_class_unchecked<T>(L, 1);
+		const T *cls = get_class<T>(L, 1, true);
 		auto fp = *(FP*)lua_touserdata(L, lua_upvalueindex(1));
 		return (cls->*fp)(L);
 	}

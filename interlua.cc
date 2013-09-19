@@ -244,9 +244,28 @@ static void get_userdata_error(lua_State *L, int absidx, int idx, const char *st
 	luaL_argerror(L, idx, msg);
 }
 
+Userdata *get_userdata_typeless(lua_State *L, int idx) {
+	auto ud = (Userdata*)lua_touserdata(L, idx);
+	if (ud && lua_rawlen(L, idx) >= sizeof(Userdata) && ud->IsValid())
+		return ud;
+	return nullptr;
+}
+
 Userdata *get_userdata(lua_State *L, int idx, void *base_class_key, bool can_be_const) {
-	luaL_checkany(L, idx);
-	int absidx = lua_absindex(L, idx);
+	// first check that 'idx' is userdata and its ours, also get the
+	// 'is_const' state, because it's stored in the same place where we
+	// check for userdata ownership
+	auto ud = (Userdata*)lua_touserdata(L, idx);
+	if (!ud) {
+		// not a userdata, let's check if there is something at all
+		luaL_checkany(L, idx);
+
+		// perhaps just a wrong argument (string, number or whatever),
+		// but we will report the error message after getting the
+		// 'base_class_key' metatable
+	}
+
+	const int absidx = lua_absindex(L, idx);
 	lua_rawgetp(L, LUA_REGISTRYINDEX, base_class_key); // class metatable
 	if (lua_isnil(L, -1)) {
 		luaL_argerror(L, idx,
@@ -254,21 +273,29 @@ Userdata *get_userdata(lua_State *L, int idx, void *base_class_key, bool can_be_
 		return nullptr;
 	}
 
-	// get the metatable of the 'absidx' arg
-	if (!lua_getmetatable(L, absidx)) {
-		// no metatable, no match
+	// at this point we know that 'idx' contains something and
+	// 'base_class_key' metatable is on the stack, but if 'idx' is not a
+	// userdata, let's report an error right there
+	if (!ud) {
 		lua_pushnil(L);
 		get_userdata_error(L, absidx, idx,
-			"type mismatch, \"%s\" expected, got \"%s\" instead");
+			"not userdata, class \"%s\" expected, got \"%s\" instead");
 		return nullptr;
 	}
 
-	// let's see if this metatable is a const table, in case if it has
-	// "__const", it's not
-	rawgetfield(L, -1, "__const");
-	bool is_const = lua_isnil(L, -1);
-	lua_pop(L, 1);
+	// at this point we have userdata at the 'absidx' and 'base_class_key'
+	// metatable on the top of the stack, let's make sure userdata is ours
+	if (lua_rawlen(L, absidx) < sizeof(Userdata) || !ud->IsValid()) {
+		lua_pushnil(L);
+		get_userdata_error(L, absidx, idx,
+			"interlua class \"%s\" expected, got foreign userdata instead");
+		return nullptr;
+	}
 
+	const bool is_const = ud->IsConst();
+
+	// we're certain that our userdata has a valid metatable
+	lua_getmetatable(L, absidx);
 	if (is_const && !can_be_const) {
 		// if the userdata is const and we need a mutable one, that's
 		// an error
@@ -293,7 +320,7 @@ Userdata *get_userdata(lua_State *L, int idx, void *base_class_key, bool can_be_
 		if (lua_rawequal(L, -1, -2)) {
 			// got a match
 			lua_pop(L, 2);
-			return (Userdata*)lua_touserdata(L, absidx);
+			return ud;
 		}
 
 		// no match, let's try the parent
