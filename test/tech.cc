@@ -214,13 +214,13 @@ STF_TEST("get_userdata") {
 		pcall_expect("mutable class \".-\" required",
 			test_get_userdata, 2)
 		test_get_userdata(3)
-		pcall_expect("type mismatch",
+		pcall_expect("class mismatch",
 			test_get_userdata, 4)
 		pcall_expect("not userdata",
 			test_BaseClass, 5)
 		pcall_expect("not userdata",
 			test_BaseClass, "123")
-		pcall_expect("type mismatch",
+		pcall_expect("class mismatch",
 			test_BaseClass, Another.new())
 		test_BaseClass(Derived.new())
 		pcall_expect("mutable class \".-\" required",
