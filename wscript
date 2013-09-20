@@ -15,10 +15,6 @@ def obj_to_dict(obj):
 def dict_to_obj(d):
 	return Dict(d)
 
-def options(opt):
-	opt.load('waf_unit_test')
-	opt.load('compiler_cxx')
-
 def get_available_lua_pcs(conf):
 	lua_potential_pcs = [
 		'lua',
@@ -63,6 +59,10 @@ def get_51_52_jit(pcs):
 
 	out.sort(key=lambda x: x.uselib)
 	return out
+
+def options(opt):
+	opt.load('waf_unit_test')
+	opt.load('compiler_cxx')
 
 def configure(conf):
 	conf.load('waf_unit_test')
