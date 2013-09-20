@@ -19,7 +19,7 @@ STF_TEST("rawgetfield") {
 	lua_getglobal(L, "table2");
 	InterLua::rawgetfield(L, -2, "b");
 	InterLua::rawgetfield(L, -2, "e");
-	STF_ASSERT(lua_compare(L, -1, -2, LUA_OPEQ));
+	STF_ASSERT(_interlua_compare(L, -1, -2, _INTERLUA_OPEQ));
 	END();
 }
 
@@ -35,7 +35,7 @@ STF_TEST("rawsetfield") {
 
 	InterLua::rawgetfield(L, -2, "test");
 	InterLua::rawgetfield(L, -2, "test");
-	STF_ASSERT(lua_compare(L, -1, -2, LUA_OPEQ));
+	STF_ASSERT(_interlua_compare(L, -1, -2, _INTERLUA_OPEQ));
 	END();
 }
 
@@ -50,7 +50,7 @@ STF_TEST("stack_pop") {
 		InterLua::stack_pop(L, 2);
 	}
 	STF_ASSERT(lua_gettop(L) == 2);
-	STF_ASSERT(lua_compare(L, -1, -2, LUA_OPEQ));
+	STF_ASSERT(_interlua_compare(L, -1, -2, _INTERLUA_OPEQ));
 	END();
 }
 

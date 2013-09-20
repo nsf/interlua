@@ -6,18 +6,81 @@
 #include <new>
 #include <cstdint>
 
+//----------------------------------------------------------------------------
+// Workarounds for Lua versions prior to 5.2
+//----------------------------------------------------------------------------
+#if LUA_VERSION_NUM < 502
+static inline int _interlua_absindex(lua_State *L, int idx) {
+	if (idx > LUA_REGISTRYINDEX && idx < 0)
+		return lua_gettop(L) + idx + 1;
+	else
+		return idx;
+}
+
+static inline void _interlua_rawgetp(lua_State *L, int idx, const void *p) {
+	idx = _interlua_absindex(L, idx);
+	lua_pushlightuserdata(L, const_cast<void*>(p));
+	lua_rawget(L, idx);
+}
+
+static inline void _interlua_rawsetp(lua_State *L, int idx, const void *p) {
+	idx = _interlua_absindex(L, idx);
+	lua_pushlightuserdata(L, const_cast<void*>(p));
+	lua_insert(L, -2); // put key behind value
+	lua_rawset(L, idx);
+}
+
+#define _INTERLUA_OPEQ 1
+#define _INTERLUA_OPLT 2
+#define _INTERLUA_OPLE 3
+
+inline int _interlua_compare(lua_State *L, int idx1, int idx2, int op) {
+	switch (op) {
+	case _INTERLUA_OPEQ:
+		return lua_equal(L, idx1, idx2);
+	case _INTERLUA_OPLT:
+		return lua_lessthan(L, idx1, idx2);
+	case _INTERLUA_OPLE:
+		return lua_equal(L, idx1, idx2) || lua_lessthan(L, idx1, idx2);
+	default:
+		return 0;
+	}
+}
+
+inline size_t _interlua_rawlen(lua_State *L, int idx) {
+	return lua_objlen(L, idx);
+}
+
+#define _INTERLUA_OK 0
+#define _interlua_pushglobaltable(L) lua_pushvalue(L, LUA_GLOBALSINDEX)
+//----------------------------------------------------------------------------
+#else
+#define _interlua_absindex lua_absindex
+#define _interlua_rawgetp lua_rawgetp
+#define _interlua_rawsetp lua_rawsetp
+#define _INTERLUA_OPEQ LUA_OPEQ
+#define _INTERLUA_OPLT LUA_OPLT
+#define _INTERLUA_OPLE LUA_OPLE
+#define _interlua_compare lua_compare
+#define _interlua_rawlen lua_rawlen
+#define _INTERLUA_OK LUA_OK
+#define _interlua_pushglobaltable lua_pushglobaltable
+#endif
+//----------------------------------------------------------------------------
+
 namespace InterLua {
 
 //============================================================================
 // Helpers
 //============================================================================
 
+
 void die(const char *str, ...);
 void stack_dump(lua_State *L);
 
 // pushes t[key] onto the stack, where t is the table at the given index
 static inline void rawgetfield(lua_State *L, int index, const char *key) {
-	index = lua_absindex(L, index);
+	index = _interlua_absindex(L, index);
 	lua_pushstring(L, key);
 	lua_rawget(L, index);
 }
@@ -25,7 +88,7 @@ static inline void rawgetfield(lua_State *L, int index, const char *key) {
 // does t[key] = v, where t is the table at the given index and v is the value
 // at the top of the stack, pops the value from the stack
 static inline void rawsetfield(lua_State *L, int index, const char *key) {
-	index = lua_absindex(L, index);
+	index = _interlua_absindex(L, index);
 	lua_pushstring(L, key);
 	lua_insert(L, -2);
 	lua_rawset(L, index);
@@ -145,7 +208,7 @@ struct StackOps {
 		// Hence, the decision is to always copy ref values, but pass
 		// pointers directly as UserdataPointer and respect the
 		// constness.
-		lua_rawgetp(L, LUA_REGISTRYINDEX, ClassKey<PURE_T>::Class());
+		_interlua_rawgetp(L, LUA_REGISTRYINDEX, ClassKey<PURE_T>::Class());
 		if (lua_isnil(L, -1)) {
 			die("pushing an unregistered class onto the lua stack");
 		}
@@ -169,7 +232,7 @@ struct StackOps<T*> {
 		void *mt = std::is_const<T>::value ?
 			ClassKey<PURE_T>::Const() :
 			ClassKey<PURE_T>::Class();
-		lua_rawgetp(L, LUA_REGISTRYINDEX, mt);
+		_interlua_rawgetp(L, LUA_REGISTRYINDEX, mt);
 		if (lua_isnil(L, -1)) {
 			die("pushing an unregistered class onto the lua stack");
 		}
@@ -310,14 +373,14 @@ _stack_ops_bool(const bool&)
 
 class Error {
 protected:
-	int code = LUA_OK;
+	int code = _INTERLUA_OK;
 
 public:
 	virtual ~Error();
 	int Code() const { return code; }
 	virtual void Set(int code, const char*);
 	virtual const char *What() const;
-	explicit operator bool() const { return this->code != LUA_OK; }
+	explicit operator bool() const { return this->code != _INTERLUA_OK; }
 };
 
 class VerboseError : public Error {
@@ -534,7 +597,7 @@ template <typename T, typename ...Args>
 struct construct {
 	static int cfunction(lua_State *L) {
 		void *mem = lua_newuserdata(L, sizeof(UserdataValue<T>));
-		lua_rawgetp(L, LUA_REGISTRYINDEX, ClassKey<T>::Class());
+		_interlua_rawgetp(L, LUA_REGISTRYINDEX, ClassKey<T>::Class());
 		lua_setmetatable(L, -2);
 		func_traits<T (Args...), index_tuple<sizeof...(Args)>>::construct(L, mem);
 		return 1;
@@ -874,16 +937,16 @@ public:
 		rawsetfield(L, -5, name);
 
 		lua_pushvalue(L, -1);
-		lua_rawsetp(L, LUA_REGISTRYINDEX, ClassKey<T>::Static());
+		_interlua_rawsetp(L, LUA_REGISTRYINDEX, ClassKey<T>::Static());
 		lua_pushvalue(L, -2);
-		lua_rawsetp(L, LUA_REGISTRYINDEX, ClassKey<T>::Class());
+		_interlua_rawsetp(L, LUA_REGISTRYINDEX, ClassKey<T>::Class());
 		lua_pushvalue(L, -3);
-		lua_rawsetp(L, LUA_REGISTRYINDEX, ClassKey<T>::Const());
+		_interlua_rawsetp(L, LUA_REGISTRYINDEX, ClassKey<T>::Const());
 
 		if (b) {
-			lua_rawgetp(L, LUA_REGISTRYINDEX, b->constkey);
-			lua_rawgetp(L, LUA_REGISTRYINDEX, b->classkey);
-			lua_rawgetp(L, LUA_REGISTRYINDEX, b->statickey);
+			_interlua_rawgetp(L, LUA_REGISTRYINDEX, b->constkey);
+			_interlua_rawgetp(L, LUA_REGISTRYINDEX, b->classkey);
+			_interlua_rawgetp(L, LUA_REGISTRYINDEX, b->statickey);
 			if (lua_isnil(L, -1)) {
 				die("trying to register a derived class '%s' "
 					"from an unregistered base class",
@@ -989,7 +1052,7 @@ public:
 };
 
 static inline NSWrapper GlobalNamespace(lua_State *L) {
-	lua_pushglobaltable(L);
+	_interlua_pushglobaltable(L);
 	return {L, true};
 }
 
@@ -1038,20 +1101,20 @@ public:
 		}
 	}
 
-#define _generic_op(op, n1, n2, luaop)				\
-	template <typename T>					\
-	bool op(T &&r) const {					\
-		stack_pop p(L, 2);				\
-		Push(L);					\
-		StackOps<T>::Push(L, std::forward<T>(r));	\
-		return lua_compare(L, n1, n2, luaop) == 1;	\
+#define _generic_op(op, n1, n2, luaop)					\
+	template <typename T>						\
+	bool op(T &&r) const {						\
+		stack_pop p(L, 2);					\
+		Push(L);						\
+		StackOps<T>::Push(L, std::forward<T>(r));		\
+		return _interlua_compare(L, n1, n2, luaop) == 1;	\
 	}
 
-	_generic_op(operator==, -2, -1, LUA_OPEQ)
-	_generic_op(operator<, -2, -1, LUA_OPLT)
-	_generic_op(operator<=, -2, -1, LUA_OPLE)
-	_generic_op(operator>, -1, -2, LUA_OPLT)
-	_generic_op(operator>=, -1, -2, LUA_OPLE)
+	_generic_op(operator==, -2, -1, _INTERLUA_OPEQ)
+	_generic_op(operator<, -2, -1, _INTERLUA_OPLT)
+	_generic_op(operator<=, -2, -1, _INTERLUA_OPLE)
+	_generic_op(operator>, -1, -2, _INTERLUA_OPLT)
+	_generic_op(operator>=, -1, -2, _INTERLUA_OPLE)
 
 #undef _generic_op
 
@@ -1106,7 +1169,7 @@ public:
 		Push(L);
 		recursive_push(L, std::forward<Args>(args)...);
 		int code = lua_pcall(L, nargs, 1, 0);
-		if (code != LUA_OK) {
+		if (code != _INTERLUA_OK) {
 			err->Set(code, lua_tostring(L, -1));
 			lua_pop(L, 1); // pop the error message from the stack
 			return {L};
@@ -1164,7 +1227,7 @@ public:
 	int Length() const {
 		stack_pop p(L, 1);
 		Push(L);
-		return lua_rawlen(L, -1);
+		return _interlua_rawlen(L, -1);
 	}
 
 	template <typename T>

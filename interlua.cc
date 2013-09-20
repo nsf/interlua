@@ -237,7 +237,7 @@ static void get_userdata_error(lua_State *L, int absidx, int idx, const char *st
 
 Userdata *get_userdata_typeless(lua_State *L, int idx) {
 	auto ud = (Userdata*)lua_touserdata(L, idx);
-	if (ud && lua_rawlen(L, idx) >= sizeof(Userdata) && ud->IsValid())
+	if (ud && _interlua_rawlen(L, idx) >= sizeof(Userdata) && ud->IsValid())
 		return ud;
 	return nullptr;
 }
@@ -256,8 +256,8 @@ Userdata *get_userdata(lua_State *L, int idx, void *base_class_key, bool can_be_
 		// 'base_class_key' metatable
 	}
 
-	const int absidx = lua_absindex(L, idx);
-	lua_rawgetp(L, LUA_REGISTRYINDEX, base_class_key); // class metatable
+	const int absidx = _interlua_absindex(L, idx);
+	_interlua_rawgetp(L, LUA_REGISTRYINDEX, base_class_key); // class metatable
 	if (lua_isnil(L, -1)) {
 		luaL_argerror(L, idx,
 			"trying to get an unregistered base class pointer");
@@ -276,7 +276,7 @@ Userdata *get_userdata(lua_State *L, int idx, void *base_class_key, bool can_be_
 
 	// at this point we have userdata at the 'absidx' and 'base_class_key'
 	// metatable on the top of the stack, let's make sure userdata is ours
-	if (lua_rawlen(L, absidx) < sizeof(Userdata) || !ud->IsValid()) {
+	if (_interlua_rawlen(L, absidx) < sizeof(Userdata) || !ud->IsValid()) {
 		lua_pushnil(L);
 		get_userdata_error(L, absidx, idx,
 			"interlua class \"%s\" expected, got foreign userdata instead");
