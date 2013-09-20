@@ -58,17 +58,26 @@ struct ClassKey {
 // Userdata
 //============================================================================
 
-constexpr uint32_t UserdataMagic = 0xA3867EF0;
+static_assert(sizeof(uintptr_t) == 4 || sizeof(uintptr_t) == 8,
+	"4 or 8 bytes uintptr_t size expected");
+constexpr uintptr_t UserdataMagic =
+	(sizeof(uintptr_t) == 4)
+	? 0xA3867EF0
+	: 0xA3867EFCE93255C0;
+constexpr uintptr_t UserdataMagicMask =
+	(sizeof(uintptr_t) == 4)
+	? 0xFFFFFFF0
+	: 0xFFFFFFFFFFFFFFF0;
 
 class Userdata {
 	// also contains a constness flag
-	uint32_t magic;
+	uintptr_t magic;
 
 public:
-	Userdata(bool constness): magic(UserdataMagic | (uint32_t)constness) {}
-	bool IsValid() const { return (magic & 0xFFFFFFF0) == UserdataMagic; }
-	bool IsConst() const { return (magic & 0x0000000F); }
-	void SetConst(bool constness) { magic = UserdataMagic | (uint32_t)constness; }
+	Userdata(bool constness): magic(UserdataMagic | (uintptr_t)constness) {}
+	bool IsValid() const { return (magic & UserdataMagicMask) == UserdataMagic; }
+	bool IsConst() const { return (magic & ~UserdataMagicMask); }
+	void SetConst(bool constness) { magic = UserdataMagic | (uintptr_t)constness; }
 
 	virtual ~Userdata();
 	virtual void *Data() = 0;
