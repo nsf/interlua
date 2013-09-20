@@ -77,13 +77,17 @@ def configure(conf):
 		conf.env.CXXFLAGS_cxxshlib = ['-fPIC']
 		conf.env.append_unique('CXXFLAGS', '-stdlib=libc++')
 		conf.env.append_unique('LINKFLAGS', '-stdlib=libc++')
-
 	conf.check_cfg(atleast_pkgconfig_version='0.0')
 
 	conf.start_msg("Checking for available Lua versions")
 	luas = get_51_52_jit(get_available_lua_pcs(conf))
 	conf.env.LUAS = [obj_to_dict(x) for x in luas]
-	conf.end_msg(", ".join(["%s %s" % (x.name, x.version) for x in luas]))
+	if luas:
+		conf.end_msg(", ".join(["%s %s" % (x.name, x.version) for x in luas]))
+	else:
+		conf.end_msg("no", "YELLOW")
+		conf.fatal("No Lua versions found, InterLua tries the following pkg-config " +
+			"packages: lua, lua51, lua5.1, lua52, lua5.2, luajit")
 
 	def check_cfg(package, uselib_store, msg):
 		conf.check_cfg(
