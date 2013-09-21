@@ -1119,6 +1119,11 @@ public:
 #undef _generic_op
 
 	template <typename T>
+	bool operator!=(T &&r) const {
+		return !operator==(std::forward<T>(r));
+	}
+
+	template <typename T>
 	Ref &operator=(T &&r) {
 		if (tableref != LUA_REFNIL) {
 			stack_pop p(L, 1);
