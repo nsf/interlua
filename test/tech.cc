@@ -231,3 +231,224 @@ STF_TEST("get_userdata") {
 	DO(init);
 	END();
 }
+
+static int ref_to_number(const InterLua::Ref &r) {
+	if (r.IsNil()) {
+		return 0;
+	}
+	return r;
+}
+
+class OOPTester {
+public:
+	OOPTester() { default_ctor++; }
+	OOPTester(const OOPTester&) { copy_ctor++; }
+	OOPTester(OOPTester&&) { move_ctor++; }
+	~OOPTester() { dtor++; }
+	OOPTester &operator=(const OOPTester&) { copy_op++; return *this; }
+	OOPTester &operator=(OOPTester&&) { move_op++; return *this; }
+
+	int get() { return 42; }
+	int const_get() const { return -42; }
+
+	static int default_ctor;
+	static int copy_ctor;
+	static int move_ctor;
+	static int dtor;
+	static int copy_op;
+	static int move_op;
+
+	static void reset() {
+		default_ctor = 0;
+		copy_ctor = 0;
+		move_ctor = 0;
+		dtor = 0;
+		copy_op = 0;
+		move_op = 0;
+	}
+
+	static void dump() {
+		fprintf(stderr, "OOPTester stats ===========\n");
+		fprintf(stderr, "default constructor: %d\n", default_ctor);
+		fprintf(stderr, "copy constructor: %d\n", copy_ctor);
+		fprintf(stderr, "move constructor: %d\n", move_ctor);
+		fprintf(stderr, "destructor: %d\n", dtor);
+		fprintf(stderr, "copy assignment operator: %d\n", copy_op);
+		fprintf(stderr, "move assignment operator: %d\n", move_op);
+	}
+
+	static bool assert(InterLua::Ref r) {
+		auto dc = r["dc"];
+		auto cc = r["cc"];
+		auto mc = r["mc"];
+		auto dt = r["dt"];
+		auto co = r["co"];
+		auto mo = r["mo"];
+		bool ok = true;
+		if (ref_to_number(dc) != default_ctor)
+			ok = false;
+		if (ref_to_number(cc) != copy_ctor)
+			ok = false;
+		if (ref_to_number(mc) != move_ctor)
+			ok = false;
+		if (ref_to_number(dt) != dtor)
+			ok = false;
+		if (ref_to_number(co) != copy_op)
+			ok = false;
+		if (ref_to_number(mo) != move_op)
+			ok = false;
+		if (!ok)
+			dump();
+		return ok;
+	}
+};
+
+int OOPTester::default_ctor = 0;
+int OOPTester::copy_ctor = 0;
+int OOPTester::move_ctor = 0;
+int OOPTester::dtor = 0;
+int OOPTester::copy_op = 0;
+int OOPTester::move_op = 0;
+
+void test_const_stackops_get(lua_State *L) {
+	OOPTester x = InterLua::StackOps<OOPTester&>::Get(L, 1);
+}
+
+// template <typename T> StackOps
+STF_TEST("StackOps<T>") {
+	OOPTester::reset();
+	using namespace InterLua;
+	LUA();
+	GlobalNamespace(L).
+		Class<OOPTester>("Tester").
+			Constructor().
+			Function("get", &OOPTester::get).
+			StaticFunction("assert", &OOPTester::assert).
+		End().
+		Function("test_const_stackops_get", &test_const_stackops_get).
+	End();
+
+	// ------------ Push tests -------------
+	// rvalue ref
+	StackOps<OOPTester>::Push(L, {});
+	lua_setglobal(L, "a");
+	DO("assert(a:get() == 42 and Tester.assert{dc=1, mc=1, dt=1})");
+	DO("a = nil");
+	lua_gc(L, LUA_GCCOLLECT, 0);
+	DO("assert(Tester.assert{dc=1, mc=1, dt=2})");
+	OOPTester::reset();
+
+	// lvalue ref
+	OOPTester t;
+	StackOps<OOPTester&>::Push(L, t);
+	lua_setglobal(L, "a");
+	DO("assert(a:get() == 42 and Tester.assert{dc=1, cc=1})");
+	DO("a = nil");
+	lua_gc(L, LUA_GCCOLLECT, 0);
+	DO("assert(Tester.assert{dc=1, cc=1, dt=1})");
+	OOPTester::reset();
+
+	// const lvalue ref
+	StackOps<const OOPTester&>::Push(L, t);
+	lua_setglobal(L, "a");
+	DO("assert(a:get() == 42 and Tester.assert{cc=1})");
+	DO("a = nil");
+	lua_gc(L, LUA_GCCOLLECT, 0);
+	DO("assert(Tester.assert{cc=1, dt=1})");
+	OOPTester::reset();
+
+	// lvalue ref explicit move (just checking)
+	StackOps<OOPTester&&>::Push(L, std::move(t));
+	lua_setglobal(L, "a");
+	DO("assert(a:get() == 42 and Tester.assert{mc=1})");
+	DO("a = nil");
+	lua_gc(L, LUA_GCCOLLECT, 0);
+	DO("assert(Tester.assert{mc=1, dt=1})");
+	OOPTester::reset();
+
+	// minor random lua check
+	DO("a = Tester()");
+	DO("assert(a:get() == 42 and Tester.assert{dc=1})");
+	DO("a = nil");
+	lua_gc(L, LUA_GCCOLLECT, 0);
+	DO("assert(Tester.assert{dc=1, dt=1})");
+	OOPTester::reset();
+
+	// ------------ Get tests -------------
+	// rvalue ref doesn't work (expected?)
+	// lvalue ref
+	StackOps<OOPTester>::Push(L, {});
+	OOPTester b = StackOps<OOPTester&>::Get(L, -1);
+	DO("assert(Tester.assert{dc=1, cc=1, mc=1, dt=1})");
+	OOPTester::reset();
+
+	// lvalue ref, check that it doesn't do anything (silly check?)
+	StackOps<OOPTester&>::Get(L, -1);
+	DO("assert(Tester.assert{})");
+
+	// const lvalue ref
+	OOPTester c = StackOps<const OOPTester&>::Get(L, -1);
+	DO("assert(Tester.assert{cc=1})");
+	OOPTester::reset();
+
+	// cleanup
+	lua_pop(L, 1);
+	lua_gc(L, LUA_GCCOLLECT, 0);
+	DO("assert(Tester.assert{dt=1})");
+	OOPTester::reset();
+
+	// const value to non-const lvalue ref
+	StackOps<const OOPTester*>::Push(L, &t);
+	lua_setglobal(L, "a");
+	const char *testget = R"*****(
+		ok, err = pcall(test_const_stackops_get, a)
+		assert(not ok)
+		assert(err:find("mutable class \".-\" required"))
+	)*****";
+	DO(testget);
+	DO("assert(Tester.assert{})");
+
+	// test Get for plain T, seems like RVO kicks in
+	StackOps<OOPTester>::Push(L, {});
+	auto d = StackOps<OOPTester>::Get(L, -1);
+	DO("assert(Tester.assert{dc=1, dt=1, mc=1, cc=1})");
+	END();
+}
+
+// template <typename T> StackOps<T*>
+STF_TEST("StackOps<T*>") {
+	OOPTester::reset();
+	using namespace InterLua;
+	LUA();
+	GlobalNamespace(L).
+		Class<OOPTester>("Tester").
+			Constructor().
+			Function("get", &OOPTester::get).
+			Function("const_get", &OOPTester::const_get).
+			StaticFunction("assert", &OOPTester::assert).
+		End().
+	End();
+
+	OOPTester t;
+
+	// T*, passing a pointer doesn't trigger any ctors/dtors
+	StackOps<OOPTester*>::Push(L, &t);
+	lua_setglobal(L, "a");
+	DO("assert(a:get() == 42 and a:const_get() == -42 and Tester.assert{dc=1})");
+	DO("assert(a.__type == 'Tester')");
+	DO("a = nil");
+	lua_gc(L, LUA_GCCOLLECT, 0);
+	DO("assert(Tester.assert{dc=1})"); // gc doesn't do anything as well
+
+	// const T*, non-const get() is not available, typename starts with "const"
+	StackOps<const OOPTester*>::Push(L, &t);
+	lua_setglobal(L, "a");
+	DO("assert(a.get == nil and a:const_get() == -42 and Tester.assert{dc=1})");
+	DO("assert(a.__type == 'const Tester')");
+	DO("a = nil");
+	lua_gc(L, LUA_GCCOLLECT, 0);
+	DO("assert(Tester.assert{dc=1})"); // gc doesn't do anything as well
+	END();
+
+	// TODO: more to go
+}
