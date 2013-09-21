@@ -63,6 +63,12 @@ def get_51_52_jit(pcs):
 def options(opt):
 	opt.load('waf_unit_test')
 	opt.load('compiler_cxx')
+	opt.add_option(
+		'--onelua',
+		action = 'store_true',
+		default = False,
+		help = 'Build tests using only default lua on this machine',
+	)
 
 def configure(conf):
 	conf.load('waf_unit_test')
@@ -88,6 +94,19 @@ def configure(conf):
 		conf.end_msg("no", "YELLOW")
 		conf.fatal("No Lua versions found, InterLua tries the following pkg-config " +
 			"packages: lua, lua51, lua5.1, lua52, lua5.2, luajit")
+
+	if conf.options.onelua:
+		onelua = None
+		for l in luas:
+			if l.pc == 'lua':
+				onelua = l
+
+		if not onelua:
+			conf.fatal("Default Lua version is not found")
+
+		conf.env.LUAS = [obj_to_dict(onelua)]
+		luas = [onelua]
+
 
 	def check_cfg(package, uselib_store, msg):
 		conf.check_cfg(
