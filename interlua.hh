@@ -5,6 +5,7 @@
 #include <utility>
 #include <new>
 #include <cstdint>
+#include <cstddef>
 
 //----------------------------------------------------------------------------
 // Workarounds for Lua versions prior to 5.2
@@ -246,6 +247,14 @@ struct StackOps<T*> {
 };
 
 template <>
+struct StackOps<std::nullptr_t> {
+	static inline void Push(lua_State *L, std::nullptr_t) {
+		lua_pushnil(L);
+	}
+	// TODO: do we need Get here?
+};
+
+template <>
 struct StackOps<lua_State*> {
 	static inline lua_State *Get(lua_State *L, int) {
 		return L;
@@ -327,6 +336,7 @@ static inline const char *Get(lua_State *L, int index) {			\
 }
 
 template <>      struct StackOps<const char*> { _stack_ops_cstr_impl };
+template <>      struct StackOps<const char*&> { _stack_ops_cstr_impl };
 template <int N> struct StackOps<const char (&)[N]> { _stack_ops_cstr_impl };
 
 #undef _stack_ops_cstr_impl
@@ -412,19 +422,22 @@ struct StackOps<T> {					\
 _stack_ops_ignore_push(Error*)
 _stack_ops_ignore_push(VerboseError*)
 _stack_ops_ignore_push(AbortError*)
+_stack_ops_ignore_push(Error*&)
+_stack_ops_ignore_push(VerboseError*&)
+_stack_ops_ignore_push(AbortError*&)
 
 #undef _stack_ops_ignore_push
 
 
 // is_error_ptr<T>::value is true, if T is a pointer to Error or a pointer to a
-// class derived from Error.
-template <typename T>
+// class derived from Error (or a reference to any of those).
+template <typename T, typename NOREF_T = typename std::remove_reference<T>::type>
 struct is_error_ptr :
 	public std::integral_constant<bool,
-		std::is_pointer<T>::value &&
+		std::is_pointer<NOREF_T>::value &&
 		std::is_base_of<
 			Error,
-			typename std::remove_pointer<T>::type
+			typename std::remove_pointer<NOREF_T>::type
 		>::value
 	> {};
 
