@@ -315,15 +315,15 @@ _stack_ops_float(const double&, double)
 #undef _stack_ops_float
 
 
-#define _stack_ops_cstr_impl						\
-static inline void Push(lua_State *L, const char *str) {		\
-	if (str)							\
-		lua_pushstring(L, str);					\
-	else								\
-		lua_pushnil(L);						\
-}									\
-static inline const char *Get(lua_State *L, int index) {		\
-	return lua_isnil(L, index) ? 0 : luaL_checkstring(L, index);	\
+#define _stack_ops_cstr_impl							\
+static inline void Push(lua_State *L, const char *str) {			\
+	if (str)								\
+		lua_pushstring(L, str);						\
+	else									\
+		lua_pushnil(L);							\
+}										\
+static inline const char *Get(lua_State *L, int index) {			\
+	return lua_isnil(L, index) ? nullptr : luaL_checkstring(L, index);	\
 }
 
 template <>      struct StackOps<const char*> { _stack_ops_cstr_impl };
