@@ -121,8 +121,8 @@ def configure(conf):
 
 	if sys.platform == "darwin" and	platform.machine() == 'x86_64' and conf.env.LIB_LUAJIT:
 		conf.env.append_unique('LINKFLAGS_LUAJIT', [
-			'-pagezero_size=10000',
-			'-image_base=100000000',
+			'-pagezero_size 10000',
+			'-image_base 100000000',
 		])
 
 def build(bld):
