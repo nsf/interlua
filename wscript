@@ -1,7 +1,7 @@
 top = '.'
 out = 'build'
 
-import sys
+import sys, platform
 from waflib.Errors import WafError
 
 # Lua emulation, maybe there is a better way? :D
@@ -118,6 +118,12 @@ def configure(conf):
 
 	for l in luas:
 		check_cfg(l.pc, l.uselib, "Checking for %s %s" % (l.name, l.version))
+
+	if sys.platform == "darwin" and	platform.architecture()[0] == '64bit' and conf.env.LIB_LUAJIT:
+		conf.env.append_unique('LIB_LUAJIT', [
+			'-pagezero_size=10000',
+			'-image_base=100000000',
+		])
 
 def build(bld):
 	bld.luas = [dict_to_obj(x) for x in bld.env.LUAS]
