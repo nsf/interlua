@@ -1,6 +1,7 @@
 #include "stf.hh"
 #include "helpers.hh"
 #include "interlua.hh"
+#include <cstring>
 
 // Technical tests, here I write test cases based on interlua C++ code chunks,
 // testing each of them in various ways. InterLua contains a lot of templates,
@@ -310,7 +311,7 @@ int OOPTester::dtor = 0;
 int OOPTester::copy_op = 0;
 int OOPTester::move_op = 0;
 
-void test_const_stackops_get(lua_State *L) {
+void test_const_ref_stackops_get(lua_State *L) {
 	OOPTester x = InterLua::StackOps<OOPTester&>::Get(L, 1);
 }
 
@@ -325,7 +326,7 @@ STF_TEST("StackOps<T>") {
 			Function("get", &OOPTester::get).
 			StaticFunction("assert", &OOPTester::assert).
 		End().
-		Function("test_const_stackops_get", &test_const_stackops_get).
+		Function("test_const_ref_stackops_get", &test_const_ref_stackops_get).
 	End();
 
 	// ------------ Push tests -------------
@@ -401,7 +402,7 @@ STF_TEST("StackOps<T>") {
 	StackOps<const OOPTester*>::Push(L, &t);
 	lua_setglobal(L, "a");
 	const char *testget = R"*****(
-		ok, err = pcall(test_const_stackops_get, a)
+		ok, err = pcall(test_const_ref_stackops_get, a)
 		assert(not ok)
 		assert(err:find("mutable class \".-\" required"))
 	)*****";
@@ -413,6 +414,10 @@ STF_TEST("StackOps<T>") {
 	auto d = StackOps<OOPTester>::Get(L, -1);
 	DO("assert(Tester.assert{dc=1, dt=1, mc=1, cc=1})");
 	END();
+}
+
+void test_const_ptr_stackops_get(lua_State *L) {
+	InterLua::StackOps<OOPTester*>::Get(L, 1);
 }
 
 // template <typename T> StackOps<T*>
@@ -427,6 +432,7 @@ STF_TEST("StackOps<T*>") {
 			Function("const_get", &OOPTester::const_get).
 			StaticFunction("assert", &OOPTester::assert).
 		End().
+		Function("test_const_ptr_stackops_get", &test_const_ptr_stackops_get).
 	End();
 
 	OOPTester t;
@@ -448,7 +454,157 @@ STF_TEST("StackOps<T*>") {
 	DO("a = nil");
 	lua_gc(L, LUA_GCCOLLECT, 0);
 	DO("assert(Tester.assert{dc=1})"); // gc doesn't do anything as well
-	END();
+	OOPTester::reset();
 
-	// TODO: more to go
+	// T* and const T* StackOps::Get
+	StackOps<const OOPTester*>::Push(L, &t);
+	lua_setglobal(L, "a");
+	const char *testget = R"*****(
+		ok, err = pcall(test_const_ptr_stackops_get, a)
+		assert(not ok)
+		assert(err:find("mutable class \".-\" required"))
+	)*****";
+	DO(testget);
+
+	lua_getglobal(L, "a");
+	auto tp = StackOps<const OOPTester*>::Get(L, -1);
+	lua_pop(L, 1);
+	STF_ASSERT(&t == tp);
+
+	StackOps<OOPTester*>::Push(L, &t);
+	tp = StackOps<OOPTester*>::Get(L, -1);
+	lua_pop(L, 1);
+	STF_ASSERT(&t == tp);
+
+	DO("a = nil");
+	lua_gc(L, LUA_GCCOLLECT, 0);
+	DO("assert(Tester.assert{})");
+
+	END();
+}
+
+// StackOps<lua_State*>
+STF_TEST("StackOps<lua_State*>") {
+	using namespace InterLua;
+	LUA();
+	auto l = StackOps<lua_State*>::Get(L, 100500);
+	STF_ASSERT(l == L);
+	STF_ASSERT(lua_gettop(L) == 0);
+	END();
+}
+
+#define _stack_ops_check(T, arg)			\
+do {							\
+	StackOps<T>::Push(L, arg);			\
+	StackOps<T&>::Push(L, arg);			\
+	StackOps<const T&>::Push(L, arg);		\
+	lua_setglobal(L, "c");				\
+	lua_setglobal(L, "b");				\
+	lua_setglobal(L, "a");				\
+	DO("assert(a == b and a == c)");		\
+	lua_getglobal(L, "a");				\
+	T a = StackOps<T>::Get(L, -1);			\
+	lua_getglobal(L, "b");				\
+	T b = StackOps<T&>::Get(L, -1);			\
+	lua_getglobal(L, "c");				\
+	T c = StackOps<const T&>::Get(L, -1);		\
+	lua_pop(L, 3);					\
+	STF_ASSERT(a == b && a == c && a == arg);	\
+} while (0)
+
+// _stack_ops_integer
+STF_TEST("_stack_ops_integer") {
+	using namespace InterLua;
+	LUA();
+
+	_stack_ops_check(signed char, -42);
+	_stack_ops_check(unsigned char, 200);
+	_stack_ops_check(short, 16241);
+	_stack_ops_check(unsigned short, 42678);
+	_stack_ops_check(int, 2057777098);
+	_stack_ops_check(unsigned int, 3567987890);
+	_stack_ops_check(long, 2057777098);
+	_stack_ops_check(unsigned long, 3567987890);
+
+	STF_ASSERT(lua_gettop(L) == 0);
+	END();
+}
+
+// _stack_ops_float
+STF_TEST("_stack_ops_float") {
+	using namespace InterLua;
+	LUA();
+
+	_stack_ops_check(float, 3.1415f);
+	_stack_ops_check(double, -3.1415);
+
+	STF_ASSERT(lua_gettop(L) == 0);
+	END();
+}
+
+// _stack_ops_cstr_impl
+STF_TEST("_stack_ops_cstr_impl") {
+	using namespace InterLua;
+	LUA();
+
+	StackOps<const char*>::Push(L, nullptr);
+	lua_setglobal(L, "a");
+	StackOps<const char*>::Push(L, "hello, world");
+	lua_setglobal(L, "b");
+	DO("assert(a == nil and b == 'hello, world')");
+	lua_getglobal(L, "a");
+	const char *a = StackOps<const char*>::Get(L, -1);
+	lua_getglobal(L, "b");
+	const char *b = StackOps<const char*>::Get(L, -1);
+	lua_pop(L, 2);
+	STF_ASSERT(a == nullptr && strcmp(b, "hello, world") == 0);
+
+	STF_ASSERT(lua_gettop(L) == 0);
+	END();
+}
+
+// _stack_ops_char and _stack_ops_bool
+STF_TEST("_stack_ops_char and _stack_ops_bool") {
+	using namespace InterLua;
+	LUA();
+	_stack_ops_check(char, 'a');
+	_stack_ops_check(char, 'Z');
+	_stack_ops_check(bool, true);
+	_stack_ops_check(bool, false);
+	STF_ASSERT(lua_gettop(L) == 0);
+	END();
+}
+
+// Error
+STF_TEST("Error") {
+	InterLua::Error err;
+	STF_ASSERT(err.Code() == _INTERLUA_OK);
+	STF_ASSERT(!err);
+	err.Set(5, "message");
+	STF_ASSERT(err.Code() == 5);
+	STF_ASSERT(strcmp(err.What(), "") == 0);
+	STF_ASSERT(err);
+}
+
+// VerboseError
+STF_TEST("VerboseError") {
+	// same as Error, but actually stores the message
+	InterLua::VerboseError err;
+	STF_ASSERT(err.Code() == _INTERLUA_OK);
+	STF_ASSERT(!err);
+	err.Set(5, "message");
+	STF_ASSERT(err.Code() == 5);
+	STF_ASSERT(strcmp(err.What(), "message") == 0);
+	STF_ASSERT(err);
+}
+
+// _stack_ops_ignore_push
+STF_TEST("_stack_ops_ignore_push") {
+	using namespace InterLua;
+	LUA();
+	StackOps<Error*>::Push(L, nullptr);
+	StackOps<VerboseError*>::Push(L, nullptr);
+	StackOps<AbortError*>::Push(L, nullptr);
+	STF_ASSERT(lua_gettop(L) == 0);
+	END();
 }
