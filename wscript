@@ -119,8 +119,8 @@ def configure(conf):
 	for l in luas:
 		check_cfg(l.pc, l.uselib, "Checking for %s %s" % (l.name, l.version))
 
-	if sys.platform == "darwin" and	platform.architecture()[0] == '64bit' and conf.env.LIB_LUAJIT:
-		conf.env.append_unique('LIB_LUAJIT', [
+	if sys.platform == "darwin" and	platform.machine() == 'x86_64' and conf.env.LIB_LUAJIT:
+		conf.env.append_unique('LINKFLAGS_LUAJIT', [
 			'-pagezero_size=10000',
 			'-image_base=100000000',
 		])
