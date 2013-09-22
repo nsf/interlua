@@ -12,6 +12,7 @@ void die(const char *str, ...) {
 	va_start(va, str);
 	std::vfprintf(stderr, str, va);
 	va_end(va);
+	std::fprintf(stderr, "\n");
 	std::abort();
 }
 
