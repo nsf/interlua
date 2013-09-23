@@ -605,6 +605,12 @@ STF_TEST("_stack_ops_ignore_push") {
 	StackOps<Error*>::Push(L, nullptr);
 	StackOps<VerboseError*>::Push(L, nullptr);
 	StackOps<AbortError*>::Push(L, nullptr);
+	Error *e = nullptr;
+	VerboseError *ve = nullptr;
+	AbortError *ae = nullptr;
+	StackOps<Error*&>::Push(L, e);
+	StackOps<VerboseError*&>::Push(L, ve);
+	StackOps<AbortError*&>::Push(L, ae);
 	STF_ASSERT(lua_gettop(L) == 0);
 	END();
 }
