@@ -69,6 +69,12 @@ def options(opt):
 		default = False,
 		help = 'Build tests using only default lua on this machine',
 	)
+	opt.add_option(
+		'--bench',
+		action = 'store_true',
+		default = False,
+		help = 'Build and run benchmarks',
+	)
 
 def configure(conf):
 	conf.load('waf_unit_test')
@@ -95,6 +101,7 @@ def configure(conf):
 		conf.fatal("No Lua versions found, InterLua tries the following pkg-config " +
 			"packages: lua, lua51, lua5.1, lua52, lua5.2, luajit")
 
+	conf.env.BUILDBENCH = conf.options.bench
 	if conf.options.onelua:
 		onelua = None
 		for l in luas:
@@ -106,7 +113,6 @@ def configure(conf):
 
 		conf.env.LUAS = [obj_to_dict(onelua)]
 		luas = [onelua]
-
 
 	def check_cfg(package, uselib_store, msg):
 		conf.check_cfg(
@@ -133,4 +139,4 @@ def build(bld):
 			target = 'interlua_' + l.uselib.lower(),
 			use = l.uselib,
 		)
-	bld.recurse('test')
+	bld.recurse('test bench')

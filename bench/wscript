@@ -1,0 +1,15 @@
+def build(bld):
+	if not bld.env.BUILDBENCH:
+		return
+
+	benchmarks = bld.path.ant_glob("*.cc")
+	for l in bld.luas:
+		for t in benchmarks:
+			bld.program(
+				features = 'test',
+				source = [t],
+				target = l.uselib.lower() + '_bench_' + t.name[:-3],
+				includes = '..',
+				install_path = None,
+				use = [l.uselib, 'interlua_' + l.uselib.lower()],
+			)
