@@ -82,7 +82,11 @@ def configure(conf):
 	if not conf.env['CXX'] and sys.platform == "darwin":
 		conf.env['CXX'] = 'clang++'
 	conf.load('compiler_cxx')
-	conf.env.append_unique('CXXFLAGS', ['-std=c++11', '-Wall', '-Wextra', '-g', '-O0'])
+	if conf.options.bench:
+		# we don't need debug flags for benchmarks
+		conf.env.append_unique('CXXFLAGS', ['-std=c++11', '-Wall', '-Wextra', '-O3'])
+	else:
+		conf.env.append_unique('CXXFLAGS', ['-std=c++11', '-Wall', '-Wextra', '-g', '-O0'])
 	if sys.platform == "darwin":
 		# on darwin we force clang++ and libc++ at the moment as it's
 		# the only option

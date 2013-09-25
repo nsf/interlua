@@ -14,7 +14,7 @@ public:
 
 const char set_and_get[] = R"*****(
 
-local N = 5
+local N = 10
 local average = 0
 local times = 1000000
 for i = 0, N do
@@ -48,7 +48,7 @@ public:
 
 const char var_set_and_get[] = R"*****(
 
-local N = 5
+local N = 10
 local average = 0
 local times = 1000000
 for i = 0, N do
@@ -91,7 +91,7 @@ class Derived : public Base {
 
 const char derived_as_base[] = R"*****(
 
-local N = 5
+local N = 10
 local average = 0
 local times = 1000000
 for i = 0, N do
@@ -166,9 +166,9 @@ int main(int, char**) {
 		End().
 	End();
 
-	dostr(L, memory_consumption);
 	dostr(L, set_and_get);
 	dostr(L, var_set_and_get);
 	dostr(L, derived_as_base);
+	//dostr(L, memory_consumption);
 	lua_close(L);
 }

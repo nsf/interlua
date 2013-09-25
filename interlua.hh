@@ -6,6 +6,7 @@
 #include <new>
 #include <cstdint>
 #include <cstddef>
+#include <cstring>
 
 //----------------------------------------------------------------------------
 // Workarounds for Lua versions prior to 5.2
@@ -79,6 +80,29 @@ namespace InterLua {
 void die(const char *str, ...);
 void stack_dump(lua_State *L);
 
+struct funcdata {
+	static constexpr size_t size = sizeof(void*) * 2;
+	uint8_t data[size];
+
+	funcdata() = default;
+
+	template <typename T>
+	funcdata(T arg) {
+		static_assert(sizeof(T) <= size,
+			"not enough place for T in funcdata");
+		static_assert(std::is_pod<T>::value,
+			"T should be POD to work here");
+		std::memcpy(data, &arg, sizeof(T));
+	}
+
+	template <typename T>
+	T as() {
+		T tmp;
+		std::memcpy(&tmp, data, sizeof(T));
+		return tmp;
+	}
+};
+
 // pushes t[key] onto the stack, where t is the table at the given index
 static inline void rawgetfield(lua_State *L, int index, const char *key) {
 	index = _interlua_absindex(L, index);
@@ -105,11 +129,24 @@ public:
 	~stack_pop() { lua_pop(L, count); }
 };
 
-// creates these tables on the stack:
+struct parent_class_keys {
+	void *static_key;
+	void *class_key;
+	void *const_key;
+};
+
+struct class_keys {
+	void *static_key;
+	void *class_key;
+	void *const_key;
+	parent_class_keys *parent;
+};
+
+// creates, registers and leaves these tables on the stack:
 //   -1 static table
 //   -2 class table
 //   -3 const table
-void create_class_tables(lua_State *L, const char *name);
+void register_class_tables(lua_State *L, const char *name, const class_keys &keys);
 
 template <typename T>
 struct ClassKey {
@@ -119,30 +156,33 @@ struct ClassKey {
 };
 
 //============================================================================
+// class_info helpers
+//============================================================================
+
+// 'index' points at userdata with interlua class metatable
+void class_info_add_var_getter(lua_State *L, int index,
+	const char *name, int (*fp)(lua_State*, funcdata), funcdata data);
+void class_info_add_var_setter(lua_State *L, int index,
+	const char *name, int (*fp)(lua_State*, funcdata), funcdata data);
+void class_info_add_read_only(lua_State *L, int index, const char *name);
+void class_info_add_const_read_only(lua_State *L, int index, const char *name);
+void class_info_add_function(lua_State *L, int index, const char *name);
+
+// 'index' points at interlua class metatable
+void class_info_mt_add_var_getter(lua_State *L, int index,
+	const char *name, int (*fp)(lua_State*, funcdata), funcdata data);
+void class_info_mt_add_var_setter(lua_State *L, int index,
+	const char *name, int (*fp)(lua_State*, funcdata), funcdata data);
+void class_info_mt_add_read_only(lua_State *L, int index, const char *name);
+void class_info_mt_add_const_read_only(lua_State *L, int index, const char *name);
+void class_info_mt_add_function(lua_State *L, int index, const char *name);
+
+//============================================================================
 // Userdata
 //============================================================================
 
-static_assert(sizeof(uintptr_t) == 4 || sizeof(uintptr_t) == 8,
-	"4 or 8 bytes uintptr_t size expected");
-constexpr uintptr_t UserdataMagic =
-	(sizeof(uintptr_t) == 4)
-	? 0xA3867EF0
-	: 0xA3867EFCE93255C0;
-constexpr uintptr_t UserdataMagicMask =
-	(sizeof(uintptr_t) == 4)
-	? 0xFFFFFFF0
-	: 0xFFFFFFFFFFFFFFF0;
-
 class Userdata {
-	// also contains a constness flag
-	uintptr_t magic;
-
 public:
-	Userdata(bool constness): magic(UserdataMagic | (uintptr_t)constness) {}
-	bool IsValid() const { return (magic & UserdataMagicMask) == UserdataMagic; }
-	bool IsConst() const { return (magic & ~UserdataMagicMask); }
-	void SetConst(bool constness) { magic = UserdataMagic | (uintptr_t)constness; }
-
 	virtual ~Userdata();
 	virtual void *Data() = 0;
 };
@@ -153,8 +193,7 @@ class UserdataValue : public Userdata {
 
 public:
 	template <typename ...Args>
-	UserdataValue(bool constness, Args &&...args):
-		Userdata(constness), value(std::forward<Args>(args)...) {}
+	UserdataValue(Args &&...args): value(std::forward<Args>(args)...) {}
 	virtual void *Data() override { return (void*)&value; }
 };
 
@@ -163,18 +202,22 @@ class UserdataPointer : public Userdata {
 	T *ptr;
 
 public:
-	UserdataPointer(bool constness, T *ptr):
-		Userdata(constness), ptr(ptr) {}
+	UserdataPointer(T *ptr): ptr(ptr) {}
 	virtual void *Data() override { return (void*)ptr; }
 };
 
-Userdata *get_userdata_typeless(lua_State *L, int index);
-Userdata *get_userdata(lua_State *L, int index, void *base_class_key, bool can_be_const);
+Userdata *get_userdata(lua_State *L, int index,
+	void *base_key, void *base_const_key, bool can_be_const);
 Userdata *get_userdata_unchecked(lua_State *L, int index);
 
 template <typename T>
 static inline T *get_class(lua_State *L, int index, bool can_be_const) {
-	return (T*)get_userdata(L, index, ClassKey<T>::Class(), can_be_const)->Data();
+	return reinterpret_cast<T*>(get_userdata(
+		L, index,
+		ClassKey<T>::Class(),
+		ClassKey<T>::Const(),
+		can_be_const
+	)->Data());
 }
 
 template <typename T>
@@ -214,7 +257,7 @@ struct StackOps {
 			die("pushing an unregistered class onto the lua stack");
 		}
 		lua_setmetatable(L, -2);
-		new (mem) UserdataValue<PURE_T>(false, std::forward<T>(value));
+		new (mem) UserdataValue<PURE_T>(std::forward<T>(value));
 	}
 
 	static inline T Get(lua_State *L, int index) {
@@ -238,7 +281,7 @@ struct StackOps<T*> {
 			die("pushing an unregistered class onto the lua stack");
 		}
 		lua_setmetatable(L, -2);
-		new (mem) UserdataPointer<T>(std::is_const<T>::value, value);
+		new (mem) UserdataPointer<T>(value);
 	}
 	static inline T *Get(lua_State *L, int index) {
 		// the class cannot be const, when T isn't const
@@ -493,7 +536,7 @@ struct func_traits<R (Args...), index_tuple_type<I...>> {
 
 	static void construct(lua_State *L, void *mem) {
 		(void)L; // silence notused warning for cases with no arguments
-		new (mem) UserdataValue<R>(false, StackOps<Args>::Get(L, I+2)...);
+		new (mem) UserdataValue<R>(StackOps<Args>::Get(L, I+2)...);
 	}
 };
 
@@ -597,7 +640,7 @@ template <typename T, typename ...Args>
 struct call<void (T::*)(Args...) const> {
 	static int cfunction(lua_State *L) {
 		typedef void (T::*FP)(Args...) const;
-		T *cls = get_class<T>(L, 1, true);
+		const T *cls = get_class<T>(L, 1, true);
 		auto fp = *(FP*)lua_touserdata(L, lua_upvalueindex(1));
 		func_traits<void (T::*)(Args...) const, index_tuple<sizeof...(Args)>>::
 			call(L, cls, fp);
@@ -655,43 +698,89 @@ static inline void recursive_push(lua_State *L, T &&arg, Args &&...args) {
 	recursive_push(L, std::forward<Args>(args)...);
 }
 
-int read_only_error(lua_State *L);
-int const_read_only_error(lua_State *L);
-
+// this function is called from __index
 template <typename T>
-int get_variable(lua_State *L) {
-	T *ptr = (T*)lua_touserdata(L, lua_upvalueindex(1));
-	StackOps<T>::Push(L, *ptr);
+int get_variable(lua_State *L, funcdata data) {
+	auto p = data.as<T*>();
+	StackOps<T>::Push(L, *p);
 	return 1;
 }
 
+// this function is called from __newindex
 template <typename T>
-int set_variable(lua_State *L) {
-	T *ptr = (T*)lua_touserdata(L, lua_upvalueindex(1));
-	*ptr = StackOps<T>::Get(L, 1);
+int set_variable(lua_State *L, funcdata data) {
+	auto p = data.as<T*>();
+	*p = StackOps<T>::Get(L, 3);
 	return 0;
 }
 
+// this function is called from __index
+template <typename T>
+int get_variable_func(lua_State *L, funcdata data) {
+	auto p = data.as<T (*)()>();
+	StackOps<T>::Push(L, (*p)());
+	return 1;
+}
+
+// this function is called from __newindex
+template <typename T>
+int set_variable_func(lua_State *L, funcdata data) {
+	auto p = data.as<void (*)(T)>();
+	(*p)(StackOps<T>::Get(L, 3));
+	return 0;
+}
+
+// this function is called from __index
 template <typename T, typename U>
-int get_property(lua_State *L) {
+int get_property(lua_State *L, funcdata data) {
 	const T *cls = get_class_unchecked<T>(L, 1);
-	U T:: *mp = *(U T::**)lua_touserdata(L, lua_upvalueindex(1));
+	auto mp = data.as<U T::*>();
 	StackOps<U>::Push(L, cls->*mp);
 	return 1;
 }
 
+// this function is called from __newindex
 template <typename T, typename U>
-int set_property(lua_State *L) {
+int set_property(lua_State *L, funcdata data) {
 	T *cls = get_class_unchecked<T>(L, 1);
-	U T:: *mp = *(U T::**)lua_touserdata(L, lua_upvalueindex(1));
-	cls->*mp = StackOps<U>::Get(L, 2);
+	auto mp = data.as<U T::*>();
+	cls->*mp = StackOps<U>::Get(L, 3);
 	return 0;
 }
 
-template <typename T>
-int gc_meta_method(lua_State *L) {
-	Userdata *ud = get_userdata_unchecked(L, 1);
-	ud->~Userdata();
+// this function is called from __index
+template <typename T, typename U>
+int get_property_func(lua_State *L, funcdata data) {
+	const T *cls = get_class_unchecked<T>(L, 1);
+	auto mp = data.as<U (*)(const T*)>();
+	StackOps<U>::Push(L, (*mp)(cls));
+	return 1;
+}
+
+// this function is called from __newindex
+template <typename T, typename U>
+int set_property_func(lua_State *L, funcdata data) {
+	T *cls = get_class_unchecked<T>(L, 1);
+	auto mp = data.as<void (*)(T*, U)>();
+	(*mp)(cls, StackOps<U>::Get(L, 3));
+	return 0;
+}
+
+// this function is called from __index
+template <typename T, typename U>
+int get_property_method(lua_State *L, funcdata data) {
+	const T *cls = get_class_unchecked<T>(L, 1);
+	auto mp = data.as<U (T::*)() const>();
+	StackOps<U>::Push(L, (cls->*mp)());
+	return 1;
+}
+
+// this function is called from __newindex
+template <typename T, typename U>
+int set_property_method(lua_State *L, funcdata data) {
+	T *cls = get_class_unchecked<T>(L, 1);
+	auto mp = data.as<void (T::*)(U)>();
+	(cls->*mp)(StackOps<U>::Get(L, 3));
 	return 0;
 }
 
@@ -715,36 +804,6 @@ class CWrapper {
 	lua_State *L = nullptr;
 	NSWrapper &parent;
 
-	template <typename GET, typename SET>
-	CWrapper &property(const char *name, GET get, SET set) {
-		rawgetfield(L, -3, "__propget"); // __propget from const table
-		rawgetfield(L, -3, "__propget"); // __propget from class table
-		*(GET*)lua_newuserdata(L, sizeof(GET)) = get;
-		lua_pushcclosure(L, call<GET>::cfunction, 1);
-		lua_pushvalue(L, -1);
-		rawsetfield(L, -3, name);
-		rawsetfield(L, -3, name);
-		lua_pop(L, 2);
-
-		rawgetfield(L, -3, "__propset"); // __propset from const table
-		lua_pushstring(L, name);
-		lua_pushcclosure(L, const_read_only_error, 1);
-		rawsetfield(L, -2, name);
-		lua_pop(L, 1);
-
-		rawgetfield(L, -2, "__propset"); // __propset from class table
-		if (set != nullptr) {
-			*(SET*)lua_newuserdata(L, sizeof(SET)) = set;
-			lua_pushcclosure(L, call<SET>::cfunction, 1);
-		} else {
-			lua_pushstring(L, name);
-			lua_pushcclosure(L, read_only_error, 1);
-		}
-		rawsetfield(L, -2, name);
-		lua_pop(L, 1);
-		return *this;
-	}
-
 public:
 	CWrapper() = delete;
 	CWrapper(lua_State *L, NSWrapper &parent): L(L), parent(parent) {}
@@ -762,45 +821,58 @@ public:
 	// getters/setters, but does it need to be restricted in that way?
 	template <typename TG, typename TS = int>
 	CWrapper &Property(const char *name, TG (T::*get)() const, void (T::*set)(TS) = nullptr) {
-		return property(name, get, set);
+		class_info_mt_add_var_getter(L, -2, name,
+			get_property_method<T, TG>, get);
+		class_info_mt_add_var_getter(L, -3, name,
+			get_property_method<T, TG>, get);
+
+		class_info_mt_add_const_read_only(L, -3, name);
+
+		if (set != nullptr) {
+			class_info_mt_add_var_setter(L, -2, name,
+				set_property_method<T, TS>, set);
+		} else {
+			class_info_mt_add_read_only(L, -2, name);
+		}
+		return *this;
 	}
 
 	template <typename TG, typename TS = int>
 	CWrapper &Property(const char *name, TG (*get)(const T*), void (*set)(T*, TS) = nullptr) {
-		return property(name, get, set);
+		class_info_mt_add_var_getter(L, -2, name,
+			get_property_func<T, TG>, get);
+		class_info_mt_add_var_getter(L, -3, name,
+			get_property_func<T, TG>, get);
+
+		class_info_mt_add_const_read_only(L, -3, name);
+
+		if (set != nullptr) {
+			class_info_mt_add_var_setter(L, -2, name,
+				set_property_func<T, TS>, set);
+		} else {
+			class_info_mt_add_read_only(L, -2, name);
+		}
+		return *this;
 	}
 
 	template <typename U>
 	CWrapper &Variable(const char *name, U T:: *mp, VariableAccess va = ReadWrite) {
-		typedef U T:: *mp_t;
-		rawgetfield(L, -3, "__propget"); // put __propget from const table
-		rawgetfield(L, -3, "__propget"); // put __propget from class table
-		*(mp_t*)lua_newuserdata(L, sizeof(mp_t)) = mp;
-		lua_pushcclosure(L, get_property<T, U>, 1);
-		lua_pushvalue(L, -1);
-		rawsetfield(L, -3, name);
-		rawsetfield(L, -3, name);
-		lua_pop(L, 2);
+		class_info_mt_add_var_getter(L, -2, name,
+			get_property<T, U>, mp);
+		class_info_mt_add_var_getter(L, -3, name,
+			get_property<T, U>, mp);
 
-		rawgetfield(L, -3, "__propset"); // put __propset from const table
-		rawgetfield(L, -3, "__propset"); // put __propset from class table
-		lua_pushstring(L, name);
-		lua_pushcclosure(L, const_read_only_error, 1);
-		rawsetfield(L, -3, name); // const_table[name] = const_read_only_error
-		lua_remove(L, -2); // remove const table from the stack
+		class_info_mt_add_const_read_only(L, -3, name);
 
 		switch (va) {
 		case ReadWrite:
-			*(mp_t*)lua_newuserdata(L, sizeof(mp_t)) = mp;
-			lua_pushcclosure(L, set_property<T, U>, 1);
+			class_info_mt_add_var_setter(L, -2, name,
+				set_property<T, U>, mp);
 			break;
 		case ReadOnly:
-			lua_pushstring(L, name);
-			lua_pushcclosure(L, read_only_error, 1);
+			class_info_mt_add_read_only(L, -2, name);
 			break;
 		}
-		rawsetfield(L, -2, name);
-		lua_pop(L, 1);
 		return *this;
 	}
 
@@ -810,10 +882,10 @@ public:
 		lua_pushcclosure(L, call<FP>::cfunction, 1);
 		if (is_const_member_function<FP>::value) {
 			lua_pushvalue(L, -1);
-			rawsetfield(L, -4, name);
-			rawsetfield(L, -4, name);
+			class_info_mt_add_function(L, -4, name);
+			class_info_mt_add_function(L, -4, name);
 		} else {
-			rawsetfield(L, -3, name);
+			class_info_mt_add_function(L, -3, name);
 		}
 		return *this;
 	}
@@ -824,36 +896,28 @@ public:
 		lua_pushcclosure(L, member_cfunction<FP>::cfunction, 1);
 		if (is_const_member_function<FP>::value) {
 			lua_pushvalue(L, -1);
-			rawsetfield(L, -4, name);
-			rawsetfield(L, -4, name);
+			class_info_mt_add_function(L, -4, name);
+			class_info_mt_add_function(L, -4, name);
 		} else {
-			rawsetfield(L, -3, name);
+			class_info_mt_add_function(L, -3, name);
 		}
 		return *this;
 	}
 
 	template <typename U>
 	CWrapper &StaticVariable(const char *name, U *p, VariableAccess va = ReadWrite) {
-		rawgetfield(L, -1, "__propget");
-		lua_pushlightuserdata(L, p);
-		lua_pushcclosure(L, get_variable<U>, 1);
-		rawsetfield(L, -2, name);
-		lua_pop(L, 1);
+		class_info_add_var_getter(L, -1, name,
+			get_variable<U>, p);
 
-		rawgetfield(L, -1, "__propset");
 		switch (va) {
 		case ReadWrite:
-			lua_pushlightuserdata(L, p);
-			lua_pushcclosure(L, set_variable<U>, 1);
+			class_info_add_var_setter(L, -1, name,
+				set_variable<U>, p);
 			break;
 		case ReadOnly:
-			lua_pushstring(L, name);
-			lua_pushcclosure(L, read_only_error, 1);
+			class_info_add_read_only(L, -1, name);
 			break;
 		}
-		rawsetfield(L, -2, name);
-		lua_pop(L, 1);
-
 		return *this;
 	}
 
@@ -862,39 +926,37 @@ public:
 	// template type deduction will fail.
 	template <typename TG, typename TS = int>
 	CWrapper &StaticProperty(const char *name, TG (*get)(), void (*set)(TS) = nullptr) {
-		typedef TG (*get_t)();
-		typedef void (*set_t)(TS);
+		class_info_add_var_getter(L, -1, name,
+			get_variable_func<TG>, get);
 
-		rawgetfield(L, -1, "__propget");
-		*(get_t*)lua_newuserdata(L, sizeof(get_t)) = get;
-		lua_pushcclosure(L, call<get_t>::cfunction, 1);
-		rawsetfield(L, -2, name);
-		lua_pop(L, 1);
-
-		rawgetfield(L, -1, "__propset");
 		if (set != nullptr) {
-			*(set_t*)lua_newuserdata(L, sizeof(set_t)) = set;
-			lua_pushcclosure(L, call<set_t>::cfunction, 1);
+			class_info_add_var_setter(L, -1, name,
+				set_variable_func<TS>, set);
 		} else {
-			lua_pushstring(L, name);
-			lua_pushcclosure(L, read_only_error, 1);
+			class_info_add_read_only(L, -1, name);
 		}
-		rawsetfield(L, -2, name);
-		lua_pop(L, 1);
-
 		return *this;
 	}
 
 	CWrapper &StaticCFunction(const char *name, lua_CFunction fp) {
 		lua_pushcfunction(L, fp);
+		lua_pushvalue(L, -1);
+		class_info_add_function(L, -3, name);
 		rawsetfield(L, -2, name);
 		return *this;
 	}
 
 	template <typename FP>
 	CWrapper &StaticFunction(const char *name, FP fp) {
+		// put two closures on the stack
 		*(FP*)lua_newuserdata(L, sizeof(fp)) = fp;
 		lua_pushcclosure(L, call<FP>::cfunction, 1);
+		lua_pushvalue(L, -1);
+
+		// insert it into the class info
+		class_info_add_function(L, -3, name);
+
+		// and then add it to the table for quick lookup
 		rawsetfield(L, -2, name);
 
 		return *this;
@@ -909,11 +971,6 @@ class NSWrapper {
 	lua_State *L = nullptr;
 	bool is_global = false;
 
-	struct base_data {
-		void *statickey;
-		void *classkey;
-		void *constkey;
-	};
 public:
 	NSWrapper() = delete;
 	NSWrapper(lua_State *L, bool is_global = false): L(L), is_global(is_global) {}
@@ -922,7 +979,7 @@ public:
 	inline NSWrapper End() { lua_pop(L, 1); return {L}; }
 
 	template <typename T>
-	CWrapper<T> Class(const char *name, base_data *b = nullptr) {
+	CWrapper<T> Class(const char *name, parent_class_keys *parent = nullptr) {
 		rawgetfield(L, -1, name);
 		if (!lua_isnil(L, -1)) {
 			rawgetfield(L, -1, "__class");
@@ -938,37 +995,18 @@ public:
 		}
 
 		lua_pop(L, 1); // pop nil
-		create_class_tables(L, name);
-
-		lua_pushcfunction(L, gc_meta_method<T>);
-		rawsetfield(L, -3, "__gc");
-		lua_pushcfunction(L, gc_meta_method<T>);
-		rawsetfield(L, -4, "__gc");
+		class_keys keys = {
+			ClassKey<T>::Static(),
+			ClassKey<T>::Class(),
+			ClassKey<T>::Const(),
+			parent,
+		};
+		register_class_tables(L, name, keys);
 
 		// namespace[name] = static_table
 		lua_pushvalue(L, -1);
 		rawsetfield(L, -5, name);
 
-		lua_pushvalue(L, -1);
-		_interlua_rawsetp(L, LUA_REGISTRYINDEX, ClassKey<T>::Static());
-		lua_pushvalue(L, -2);
-		_interlua_rawsetp(L, LUA_REGISTRYINDEX, ClassKey<T>::Class());
-		lua_pushvalue(L, -3);
-		_interlua_rawsetp(L, LUA_REGISTRYINDEX, ClassKey<T>::Const());
-
-		if (b) {
-			_interlua_rawgetp(L, LUA_REGISTRYINDEX, b->constkey);
-			_interlua_rawgetp(L, LUA_REGISTRYINDEX, b->classkey);
-			_interlua_rawgetp(L, LUA_REGISTRYINDEX, b->statickey);
-			if (lua_isnil(L, -1)) {
-				die("trying to register a derived class '%s' "
-					"from an unregistered base class",
-					name);
-			}
-			rawsetfield(L, -4, "__parent");
-			rawsetfield(L, -4, "__parent");
-			rawsetfield(L, -4, "__parent");
-		}
 		return {L, *this};
 	}
 
@@ -977,12 +1015,21 @@ public:
 		static_assert(std::is_base_of<Base, T>::value,
 			"T must be a class derived from Base");
 
-		base_data b = {
+		// check if the base class was registered previously
+		_interlua_rawgetp(L, LUA_REGISTRYINDEX, ClassKey<Base>::Static());
+		if (lua_isnil(L, -1)) {
+			die("trying to register a derived class '%s' "
+				"from an unregistered base class",
+				name);
+		}
+		lua_pop(L, 1);
+
+		parent_class_keys parent = {
 			ClassKey<Base>::Static(),
 			ClassKey<Base>::Class(),
 			ClassKey<Base>::Const(),
 		};
-		return Class<T>(name, &b);
+		return Class<T>(name, &parent);
 	}
 
 	NSWrapper &CFunction(const char *name, int (*fp)(lua_State*)) {
@@ -996,7 +1043,6 @@ public:
 		*(FP*)lua_newuserdata(L, sizeof(fp)) = fp;
 		lua_pushcclosure(L, call<FP>::cfunction, 1);
 		rawsetfield(L, -2, name);
-
 		return *this;
 	}
 
@@ -1007,26 +1053,18 @@ public:
 				"InterLua doesn't support variables in the global namespace",
 				name);
 		}
-		rawgetfield(L, -1, "__propget");
-		lua_pushlightuserdata(L, p);
-		lua_pushcclosure(L, get_variable<T>, 1);
-		rawsetfield(L, -2, name);
-		lua_pop(L, 1);
+		class_info_add_var_getter(L, -1, name,
+			get_variable<T>, p);
 
-		rawgetfield(L, -1, "__propset");
 		switch (va) {
 		case ReadWrite:
-			lua_pushlightuserdata(L, p);
-			lua_pushcclosure(L, set_variable<T>, 1);
+			class_info_add_var_setter(L, -1, name,
+				set_variable<T>, p);
 			break;
 		case ReadOnly:
-			lua_pushstring(L, name);
-			lua_pushcclosure(L, read_only_error, 1);
+			class_info_add_read_only(L, -1, name);
 			break;
 		}
-		rawsetfield(L, -2, name);
-		lua_pop(L, 1);
-
 		return *this;
 	}
 
@@ -1040,26 +1078,16 @@ public:
 				"InterLua doesn't support properties in the global namespace",
 				name);
 		}
-		typedef TG (*get_t)();
-		typedef void (*set_t)(TS);
 
-		rawgetfield(L, -1, "__propget");
-		*(get_t*)lua_newuserdata(L, sizeof(get_t)) = get;
-		lua_pushcclosure(L, call<get_t>::cfunction, 1);
-		rawsetfield(L, -2, name);
-		lua_pop(L, 1);
+		class_info_add_var_getter(L, -1, name,
+			get_variable_func<TG>, get);
 
-		rawgetfield(L, -1, "__propset");
 		if (set != nullptr) {
-			*(set_t*)lua_newuserdata(L, sizeof(set_t)) = set;
-			lua_pushcclosure(L, call<set_t>::cfunction, 1);
+			class_info_add_var_setter(L, -1, name,
+				set_variable_func<TS>, set);
 		} else {
-			lua_pushstring(L, name);
-			lua_pushcclosure(L, read_only_error, 1);
+			class_info_add_read_only(L, -1, name);
 		}
-		rawsetfield(L, -2, name);
-		lua_pop(L, 1);
-
 		return *this;
 	}
 };

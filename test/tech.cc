@@ -56,6 +56,7 @@ STF_TEST("stack_pop") {
 }
 
 // void create_class_tables(lua_State *L, const char *name)
+/*
 STF_TEST("create_class_tables") {
 	LUA();
 	InterLua::create_class_tables(L, "Dummy");
@@ -91,6 +92,7 @@ STF_TEST("create_class_tables") {
 	}
 	END();
 }
+*/
 
 // template <typename T> struct ClassKey
 STF_TEST("ClassKey") {
@@ -138,22 +140,34 @@ void test_get_userdata(int n, lua_State *L) {
 	switch (n) {
 	case 1:
 		// expect "unregistered base class"
-		get_userdata(L, -1, ClassKey<NotRegistered>::Class(), true);
+		get_userdata(L, -1,
+			ClassKey<NotRegistered>::Class(),
+			ClassKey<NotRegistered>::Const(),
+			true);
 		break;
 	case 2:
 		// expect "mutable class required"
 		StackOps<const DerivedClass*>::Push(L, &d);
-		get_userdata(L, -1, ClassKey<BaseClass>::Class(), false);
+		get_userdata(L, -1,
+			ClassKey<BaseClass>::Class(),
+			ClassKey<BaseClass>::Const(),
+			false);
 		break;
 	case 3:
 		// ok
 		StackOps<const DerivedClass*>::Push(L, &d);
-		get_userdata(L, -1, ClassKey<BaseClass>::Class(), true);
+		get_userdata(L, -1,
+			ClassKey<BaseClass>::Class(),
+			ClassKey<BaseClass>::Const(),
+			true);
 		break;
 	case 4:
 		// expect "class mismatch"
 		StackOps<const AnotherClass&>::Push(L, a);
-		get_userdata(L, -1, ClassKey<BaseClass>::Class(), true);
+		get_userdata(L, -1,
+			ClassKey<BaseClass>::Class(),
+			ClassKey<BaseClass>::Const(),
+			true);
 		break;
 	default:
 		break;
@@ -165,10 +179,6 @@ void test_BaseClass(BaseClass*) {
 
 InterLua::Ref to_const(InterLua::Ref r, lua_State *L) {
 	r.Push(L);
-	auto ud = InterLua::get_userdata_typeless(L, -1);
-	if (!ud)
-		return r;
-	ud->SetConst(true);
 	if (!lua_getmetatable(L, -1))
 		return r;
 	InterLua::rawgetfield(L, -1, "__const");
@@ -441,7 +451,7 @@ STF_TEST("StackOps<T*>") {
 	StackOps<OOPTester*>::Push(L, &t);
 	lua_setglobal(L, "a");
 	DO("assert(a:get() == 42 and a:const_get() == -42 and Tester.assert{dc=1})");
-	DO("assert(a.__type == 'Tester')");
+	DO("assert(getmetatable(a).__type == 'Tester')");
 	DO("a = nil");
 	lua_gc(L, LUA_GCCOLLECT, 0);
 	DO("assert(Tester.assert{dc=1})"); // gc doesn't do anything as well
@@ -450,7 +460,7 @@ STF_TEST("StackOps<T*>") {
 	StackOps<const OOPTester*>::Push(L, &t);
 	lua_setglobal(L, "a");
 	DO("assert(a.get == nil and a:const_get() == -42 and Tester.assert{dc=1})");
-	DO("assert(a.__type == 'const Tester')");
+	DO("assert(getmetatable(a).__type == 'const Tester')");
 	DO("a = nil");
 	lua_gc(L, LUA_GCCOLLECT, 0);
 	DO("assert(Tester.assert{dc=1})"); // gc doesn't do anything as well
