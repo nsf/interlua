@@ -674,7 +674,7 @@ static int index_meta_method(lua_State *L) {
 			continue;
 		}
 
-		auto &mi = it->second;
+		const auto &mi = it->second;
 		switch (mi.type) {
 		case method_function:
 			if (parent) {
@@ -718,7 +718,7 @@ static int newindex_meta_method(lua_State *L) {
 			continue;
 		}
 
-		auto &mi = it->second;
+		const auto &mi = it->second;
 		switch (mi.type) {
 		case method_tter:
 			return (*mi.tter)(L, mi.data);
