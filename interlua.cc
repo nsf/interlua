@@ -249,6 +249,7 @@ class string {
 
 	const char *mdata = 0;
 	size_t msize = 0;
+	size_t mhash = 0;
 
 public:
 	class temporary_tag {};
@@ -257,6 +258,7 @@ public:
 	bool is_persistent() const { return msize & persistence_bit; }
 	int size() const { return msize & size_mask; }
 	const char *c_str() const { return mdata; }
+	size_t hash() const { return mhash; }
 
 	void clear() {
 		if (is_persistent()) {
@@ -401,10 +403,19 @@ public:
 	bool operator!=(const string &r) const {
 		return !operator==(r);
 	}
+
+	void prehash() {
+		mhash = __murmur2_or_cityhash<size_t>()(
+			(const void*)mdata, size()
+		);
+	}
 };
 
 struct string_hash {
 	size_t operator()(const string &s) const {
+		size_t h = s.hash();
+		if (h)
+			return h;
 		return __murmur2_or_cityhash<size_t>()(
 			(const void*)s.c_str(), s.size()
 		);
@@ -645,6 +656,7 @@ static int index_meta_method(lua_State *L) {
 		return 1;
 	}
 	string str {strdata, (int)len, string::temporary};
+	str.prehash();
 	lua_rawgeti(L, -1, 1);
 	auto cip = to_class_info(L, -1);
 
@@ -691,6 +703,7 @@ static int newindex_meta_method(lua_State *L) {
 		return luaL_argerror(L, 2, "invalid string argument");
 	}
 	string str {strdata, (int)len, string::temporary};
+	str.prehash();
 	lua_rawgeti(L, -1, 1);
 	auto cip = to_class_info(L, -1);
 
@@ -737,8 +750,9 @@ static class_info *get_class_info_for(lua_State *L, void *key) {
 		return nullptr;
 	}
 
-	auto cip = get_class_info(L, -1);
-	lua_pop(L, 1);
+	lua_rawgeti(L, -1, 1);
+	auto cip = to_class_info(L, -1);
+	lua_pop(L, 2);
 	return cip;
 }
 
