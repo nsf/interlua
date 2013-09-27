@@ -449,17 +449,13 @@ struct class_info {
 	uintptr_t magic = class_info_magic;
 	void *class_id;
 	class_info *parent;
-	class_info *const_class_info;
 	string_map<method_info> get_table;
 	string_map<method_info> set_table;
 	bool is_const;
 
-	class_info(void *class_id, class_info *parent, bool is_const,
-		class_info *const_class_info = nullptr)
-	:
+	class_info(void *class_id, class_info *parent, bool is_const):
 		class_id(class_id),
 		parent(parent),
-		const_class_info(const_class_info),
 		is_const(is_const)
 	{
 	}
@@ -783,7 +779,6 @@ void register_class_tables(lua_State *L, const char *name, const class_keys &key
 			? get_class_info_for(L, keys.parent->class_key)
 			: nullptr,
 		false,
-		get_class_info(L, -2),
 	});
 	lua_rawseti(L, -2, 1);
 
