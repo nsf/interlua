@@ -244,8 +244,8 @@ static void *xmalloc(size_t n) {
 class string {
 	// size contains persistence bit if the string is persistent, otherwise
 	// it's temporary
-	static constexpr uint32_t persistence_bit = 1 << 31;
-	static constexpr uint32_t size_mask = ~persistence_bit;
+	static constexpr size_t persistence_bit = (size_t)1 << (sizeof(size_t)*8-1);
+	static constexpr size_t size_mask = ~persistence_bit;
 
 	const char *mdata = 0;
 	size_t msize = 0;
@@ -256,7 +256,7 @@ public:
 	static constexpr temporary_tag temporary = {};
 
 	bool is_persistent() const { return msize & persistence_bit; }
-	int size() const { return msize & size_mask; }
+	size_t size() const { return msize & size_mask; }
 	const char *c_str() const { return mdata; }
 	size_t hash() const { return mhash; }
 
@@ -295,7 +295,7 @@ public:
 		mdata = str;
 	}
 
-	string(const char *str, int len) {
+	string(const char *str, size_t len) {
 		if (str == nullptr)
 			return;
 
@@ -306,11 +306,11 @@ public:
 		strncpy(newdata, str, len);
 		newdata[len-1] = '\0';
 
-		msize = (size_t)len | persistence_bit;
+		msize = len | persistence_bit;
 		mdata = newdata;
 	}
 
-	string(const char *str, int len, temporary_tag) {
+	string(const char *str, size_t len, temporary_tag) {
 		if (str == nullptr)
 			return;
 
@@ -389,11 +389,11 @@ public:
 	}
 
 	bool operator==(const string &r) const {
-		int s1 = size();
-		int s2 = r.size();
+		size_t s1 = size();
+		size_t s2 = r.size();
 		if (s1 != s2)
 			return false;
-		for (int i = 0; i < s1; i++) {
+		for (size_t i = 0; i < s1; i++) {
 			if (mdata[i] != r.mdata[i])
 				return false;
 		}
@@ -655,7 +655,7 @@ static int index_meta_method(lua_State *L) {
 		lua_pushnil(L);
 		return 1;
 	}
-	string str {strdata, (int)len, string::temporary};
+	string str {strdata, len, string::temporary};
 	str.prehash();
 	lua_rawgeti(L, -1, 1);
 	auto cip = to_class_info(L, -1);
@@ -702,7 +702,7 @@ static int newindex_meta_method(lua_State *L) {
 	if (!strdata) {
 		return luaL_argerror(L, 2, "invalid string argument");
 	}
-	string str {strdata, (int)len, string::temporary};
+	string str {strdata, len, string::temporary};
 	str.prehash();
 	lua_rawgeti(L, -1, 1);
 	auto cip = to_class_info(L, -1);
