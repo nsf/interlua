@@ -649,7 +649,8 @@ static int index_meta_method(lua_State *L) {
 		return 1;
 	}
 	string str {strdata, (int)len, string::temporary};
-	auto cip = get_class_info(L, -1);
+	lua_rawgeti(L, -1, 1);
+	auto cip = to_class_info(L, -1);
 
 	// use class info to retrieve the function or execute the getter
 	bool parent = false;
@@ -671,8 +672,10 @@ static int index_meta_method(lua_State *L) {
 			if (parent) {
 				_interlua_rawgetp(L,
 					LUA_REGISTRYINDEX, cip->class_id);
+				lua_rawgeti(L, -1, mi.func_index);
+			} else {
+				lua_rawgeti(L, -2, mi.func_index);
 			}
-			lua_rawgeti(L, -1, mi.func_index);
 			return 1;
 		case method_tter:
 			return (*mi.tter)(L, mi.data);
@@ -910,7 +913,8 @@ Userdata *get_userdata(lua_State *L, int idx,
 	}
 
 	// get class info
-	auto cip = get_class_info(L, -1);
+	lua_rawgeti(L, -1, 1);
+	auto cip = to_class_info(L, -1);
 	if (!cip) {
 		lua_pushnil(L);
 		get_userdata_error(L, absidx, idx, base_key,
@@ -922,6 +926,7 @@ Userdata *get_userdata(lua_State *L, int idx,
 	if (cip->is_const && !can_be_const) {
 		// if the userdata is const and we need a mutable one, that's
 		// an error
+		lua_insert(L, -2);
 		get_userdata_error(L, absidx, idx, base_key,
 			"mutable class \"%s\" required, got \"%s\" instead");
 		return nullptr;
@@ -933,11 +938,12 @@ Userdata *get_userdata(lua_State *L, int idx,
 
 	for (;;) {
 		if (cip->class_id == base_key) {
-			lua_pop(L, 1);
+			lua_pop(L, 2);
 			return ud;
 		}
 		cip = cip->parent;
 		if (cip == nullptr) {
+			lua_insert(L, -2);
 			get_userdata_error(L, absidx, idx, base_key,
 				"class mismatch, \"%s\" expected, got \"%s\" instead");
 			return nullptr;
