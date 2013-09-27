@@ -1,22 +1,3 @@
-from waflib import Logs
-def summary(bld):
-	lst = getattr(bld, 'utest_results', [])
-	if lst:
-		Logs.pprint('CYAN', '=== EXECUTION SUMMARY ===')
-
-		total = len(lst)
-		tfail = len([x for x in lst if x[1]])
-
-		for (f, code, out, err) in lst:
-			Logs.pprint('CYAN', '%s' % f)
-			out = (out.rstrip() + "\n".encode("utf-8") + err.rstrip()).strip()
-			if out:
-				Logs.pprint('NORMAL', '%s' % out.decode('utf-8'))
-		col = 'CYAN'
-		if tfail:
-			col = 'RED'
-		Logs.pprint(col, 'tests that pass %d/%d' % (total-tfail, total))
-
 def build(bld):
 	tests = bld.path.ant_glob("*.cc")
 	for l in bld.luas:
@@ -29,7 +10,3 @@ def build(bld):
 				install_path = None,
 				use = [l.uselib, 'interlua_' + l.uselib.lower()],
 			)
-
-	bld.add_post_fun(summary)
-	from waflib.Tools import waf_unit_test
-	bld.add_post_fun(waf_unit_test.set_exit_code)

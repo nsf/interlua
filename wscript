@@ -2,7 +2,10 @@ top = '.'
 out = 'build'
 
 import sys, platform
+from waflib import Logs
 from waflib.Errors import WafError
+from waflib.Build import BuildContext
+from waflib.Tools import waf_unit_test
 
 # Lua emulation, maybe there is a better way? :D
 class Dict(object):
@@ -70,10 +73,10 @@ def options(opt):
 		help = 'Build tests using only default lua on this machine',
 	)
 	opt.add_option(
-		'--bench',
+		'--optimize',
 		action = 'store_true',
 		default = False,
-		help = 'Build and run benchmarks',
+		help = "Don't add debug info, optimize code harder instead",
 	)
 
 def configure(conf):
@@ -82,7 +85,7 @@ def configure(conf):
 	if not conf.env['CXX'] and sys.platform == "darwin":
 		conf.env['CXX'] = 'clang++'
 	conf.load('compiler_cxx')
-	if conf.options.bench:
+	if conf.options.optimize:
 		# we don't need debug flags for benchmarks
 		conf.env.append_unique('CXXFLAGS', ['-std=c++11', '-Wall', '-Wextra', '-O3'])
 	else:
@@ -105,7 +108,6 @@ def configure(conf):
 		conf.fatal("No Lua versions found, InterLua tries the following pkg-config " +
 			"packages: lua, lua51, lua5.1, lua52, lua5.2, luajit")
 
-	conf.env.BUILDBENCH = conf.options.bench
 	if conf.options.onelua:
 		onelua = None
 		for l in luas:
@@ -135,7 +137,30 @@ def configure(conf):
 			'-image_base 100000000',
 		])
 
-def build(bld):
+def summary(bld):
+	lst = getattr(bld, 'utest_results', [])
+	if lst:
+		Logs.pprint('CYAN', '=== EXECUTION SUMMARY ===')
+
+		total = len(lst)
+		tfail = len([x for x in lst if x[1]])
+
+		for (f, code, out, err) in lst:
+			Logs.pprint('CYAN', '%s' % f)
+			out = (out.rstrip() + "\n".encode("utf-8") + err.rstrip()).strip()
+			if out:
+				Logs.pprint('NORMAL', '%s' % out.decode('utf-8'))
+		col = 'CYAN'
+		if tfail:
+			col = 'RED'
+		Logs.pprint(col, 'tests that pass %d/%d' % (total-tfail, total))
+
+def queue_tests_summary(bld):
+	bld.add_post_fun(summary)
+	bld.add_post_fun(waf_unit_test.set_exit_code)
+
+
+def build_interlua(bld):
 	bld.luas = [dict_to_obj(x) for x in bld.env.LUAS]
 	for l in bld.luas:
 		bld.objects(
@@ -143,4 +168,19 @@ def build(bld):
 			target = 'interlua_' + l.uselib.lower(),
 			use = l.uselib,
 		)
-	bld.recurse('test bench')
+
+def build(bld):
+	queue_tests_summary(bld)
+	build_interlua(bld)
+	bld.recurse('test')
+
+#-----------------------------------------------------------------------
+
+class Bench(BuildContext):
+	cmd = 'bench'
+	fun = 'bench'
+
+def bench(bld):
+	queue_tests_summary(bld)
+	build_interlua(bld)
+	bld.recurse('bench')

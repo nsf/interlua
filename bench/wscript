@@ -1,7 +1,4 @@
-def build(bld):
-	if not bld.env.BUILDBENCH:
-		return
-
+def bench(bld):
 	benchmarks = bld.path.ant_glob("*.cc")
 	for l in bld.luas:
 		for t in benchmarks:
