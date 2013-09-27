@@ -691,7 +691,8 @@ static int newindex_meta_method(lua_State *L) {
 		return luaL_argerror(L, 2, "invalid string argument");
 	}
 	string str {strdata, (int)len, string::temporary};
-	auto cip = get_class_info(L, -1);
+	lua_rawgeti(L, -1, 1);
+	auto cip = to_class_info(L, -1);
 
 	for (;;) {
 		if (!cip) {
