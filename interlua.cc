@@ -873,6 +873,10 @@ static void get_userdata_error(lua_State *L, int absidx, int idx, void *base_cla
 	}
 
 	_interlua_rawgetp(L, LUA_REGISTRYINDEX, base_class_key);
+	if (lua_isnil(L, -1)) {
+		luaL_argerror(L, idx,
+			"trying to get an unregistered base class value");
+	}
 	rawgetfield(L, -1, "__type");
 	const char *expected = lua_tostring(L, -1);
 	const char *msg = lua_pushfstring(L, str, expected, got);
@@ -882,15 +886,6 @@ static void get_userdata_error(lua_State *L, int absidx, int idx, void *base_cla
 Userdata *get_userdata(lua_State *L, int idx,
 	void *base_key, void *base_const_key, bool can_be_const)
 {
-	// is the 'base_key' registered?
-	_interlua_rawgetp(L, LUA_REGISTRYINDEX, base_key);
-	if (lua_isnil(L, -1)) {
-		luaL_argerror(L, idx,
-			"trying to get an unregistered base class value");
-		return nullptr;
-	}
-	lua_pop(L, 1);
-
 	const int absidx = _interlua_absindex(L, idx);
 
 	// is it userdata?
