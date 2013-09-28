@@ -12,6 +12,8 @@
 // Workarounds for Lua versions prior to 5.2
 //----------------------------------------------------------------------------
 #if LUA_VERSION_NUM < 502
+//----------------------------------------------------------------------------
+
 static inline int _interlua_absindex(lua_State *L, int idx) {
 	if (idx > LUA_REGISTRYINDEX && idx < 0)
 		return lua_gettop(L) + idx + 1;
@@ -55,8 +57,11 @@ inline size_t _interlua_rawlen(lua_State *L, int idx) {
 
 #define _INTERLUA_OK 0
 #define _interlua_pushglobaltable(L) lua_pushvalue(L, LUA_GLOBALSINDEX)
+
 //----------------------------------------------------------------------------
 #else
+//----------------------------------------------------------------------------
+
 #define _interlua_absindex lua_absindex
 #define _interlua_rawgetp lua_rawgetp
 #define _interlua_rawsetp lua_rawsetp
@@ -67,15 +72,16 @@ inline size_t _interlua_rawlen(lua_State *L, int idx) {
 #define _interlua_rawlen lua_rawlen
 #define _INTERLUA_OK LUA_OK
 #define _interlua_pushglobaltable lua_pushglobaltable
+
+//----------------------------------------------------------------------------
 #endif
 //----------------------------------------------------------------------------
 
 namespace InterLua {
 
 //============================================================================
-// Helpers
+// Misc helpers
 //============================================================================
-
 
 void die(const char *str, ...);
 void stack_dump(lua_State *L);
@@ -156,7 +162,7 @@ struct ClassKey {
 };
 
 //============================================================================
-// class_info helpers
+// Class info helpers
 //============================================================================
 
 // 'index' points at userdata with interlua class metatable
@@ -214,8 +220,7 @@ template <typename T>
 static inline T *get_class(lua_State *L, int index, bool can_be_const) {
 	return reinterpret_cast<T*>(get_userdata(
 		L, index,
-		ClassKey<T>::Class(),
-		ClassKey<T>::Const(),
+		ClassKey<T>::Class(), ClassKey<T>::Const(),
 		can_be_const
 	)->Data());
 }
@@ -226,7 +231,7 @@ static inline T *get_class_unchecked(lua_State *L, int index) {
 }
 
 //============================================================================
-// Stack Operations
+// Stack operations
 //============================================================================
 
 template <typename T>
@@ -472,47 +477,8 @@ _stack_ops_ignore_push(AbortError*&)
 #undef _stack_ops_ignore_push
 
 
-// is_error_ptr<T>::value is true, if T is a pointer to Error or a pointer to a
-// class derived from Error (or a reference to any of those).
-template <typename T, typename NOREF_T = typename std::remove_reference<T>::type>
-struct is_error_ptr :
-	public std::integral_constant<bool,
-		std::is_pointer<NOREF_T>::value &&
-		std::is_base_of<
-			Error,
-			typename std::remove_pointer<NOREF_T>::type
-		>::value
-	> {};
-
-template <typename T, bool OK = is_error_ptr<T>::value>
-struct get_error_or_null;
-
-template <typename T>
-struct get_error_or_null<T, true> {
-	static inline Error *get(T &&v) { return v; }
-};
-
-template <typename T>
-struct get_error_or_null<T, false> {
-	static inline Error *get(T&&) { return nullptr; }
-};
-
-static inline Error *get_last_if_error() {
-	return nullptr;
-}
-
-template <typename T>
-static inline Error *get_last_if_error(T &&last) {
-	return get_error_or_null<T>::get(std::forward<T>(last));
-}
-
-template <typename T, typename ...Args>
-static inline Error *get_last_if_error(T&&, Args &&...args) {
-	return get_last_if_error(std::forward<Args>(args)...);
-}
-
 //============================================================================
-// Function Binding Helpers
+// Function binding helpers
 //============================================================================
 
 template<int ...I> struct index_tuple_type {
@@ -648,7 +614,10 @@ struct call<void (T::*)(Args...) const> {
 	}
 };
 
-// placement constructor wrapper
+//============================================================================
+// Constructor binding helper
+//============================================================================
+
 template <typename T, typename ...Args>
 struct construct {
 	static int cfunction(lua_State *L) {
@@ -659,6 +628,10 @@ struct construct {
 		return 1;
 	}
 };
+
+//============================================================================
+// Member lua_CFunction binding helpers (mutable and const)
+//============================================================================
 
 template <typename FP>
 struct member_cfunction;
@@ -683,23 +656,8 @@ struct member_cfunction<int (T::*)(lua_State*) const> {
 	}
 };
 
-static inline void recursive_push(lua_State*) {
-	// no arguments
-}
-
-template <typename T>
-static inline void recursive_push(lua_State *L, T &&arg) {
-	StackOps<T>::Push(L, std::forward<T>(arg));
-}
-
-template <typename T, typename ...Args>
-static inline void recursive_push(lua_State *L, T &&arg, Args &&...args) {
-	StackOps<T>::Push(L, std::forward<T>(arg));
-	recursive_push(L, std::forward<Args>(args)...);
-}
-
 //============================================================================
-// variable binding helpers
+// Variable binding helpers
 //============================================================================
 
 // variable getter, contains 'cfunction' which is called directly from __index
@@ -746,8 +704,8 @@ struct set_variable<void (*)(T)> {
 	}
 };
 
-// common binding helper, works for static property/variable in the class and
-// for property/variable in the namespace
+// common binding helper, works for static properties/variables in the class
+// and for properties/variables in the namespace
 template <typename G, typename S>
 void variable(lua_State *L, const char *name, G get, S set) {
 	class_info_add_var_getter(L, -1, name,
@@ -762,7 +720,7 @@ void variable(lua_State *L, const char *name, G get, S set) {
 }
 
 //============================================================================
-// property binding helpers
+// Property binding helpers
 //============================================================================
 
 // property getter, contains 'cfunction' which is called directly from __index
@@ -1090,6 +1048,68 @@ static inline NSWrapper GlobalNamespace(lua_State *L) {
 static inline NSWrapper NewNamespace(lua_State *L) {
 	lua_newtable(L);
 	return {L};
+}
+
+//============================================================================
+// Get last argument if it's an *Error
+//============================================================================
+
+// is_error_ptr<T>::value is true, if T is a pointer to Error or a pointer to a
+// class derived from Error (or a reference to any of those).
+template <typename T, typename NOREF_T = typename std::remove_reference<T>::type>
+struct is_error_ptr :
+	public std::integral_constant<bool,
+		std::is_pointer<NOREF_T>::value &&
+		std::is_base_of<
+			Error,
+			typename std::remove_pointer<NOREF_T>::type
+		>::value
+	> {};
+
+template <typename T, bool OK = is_error_ptr<T>::value>
+struct get_error_or_null;
+
+template <typename T>
+struct get_error_or_null<T, true> {
+	static inline Error *get(T &&v) { return v; }
+};
+
+template <typename T>
+struct get_error_or_null<T, false> {
+	static inline Error *get(T&&) { return nullptr; }
+};
+
+static inline Error *get_last_if_error() {
+	return nullptr;
+}
+
+template <typename T>
+static inline Error *get_last_if_error(T &&last) {
+	return get_error_or_null<T>::get(std::forward<T>(last));
+}
+
+template <typename T, typename ...Args>
+static inline Error *get_last_if_error(T&&, Args &&...args) {
+	return get_last_if_error(std::forward<Args>(args)...);
+}
+
+//============================================================================
+// Recursive push helper
+//============================================================================
+
+static inline void recursive_push(lua_State*) {
+	// no arguments
+}
+
+template <typename T>
+static inline void recursive_push(lua_State *L, T &&arg) {
+	StackOps<T>::Push(L, std::forward<T>(arg));
+}
+
+template <typename T, typename ...Args>
+static inline void recursive_push(lua_State *L, T &&arg, Args &&...args) {
+	StackOps<T>::Push(L, std::forward<T>(arg));
+	recursive_push(L, std::forward<Args>(args)...);
 }
 
 //============================================================================
