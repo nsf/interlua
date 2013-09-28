@@ -836,17 +836,6 @@ void register_class_tables(lua_State *L, const char *name, const class_keys &key
 	_interlua_rawsetp(L, LUA_REGISTRYINDEX, keys.class_key);
 	lua_pushvalue(L, -3);
 	_interlua_rawsetp(L, LUA_REGISTRYINDEX, keys.const_key);
-
-	// -- set parent pointers --
-	// TODO: remove this?
-	if (keys.parent) {
-		_interlua_rawgetp(L, LUA_REGISTRYINDEX, keys.parent->const_key);
-		_interlua_rawgetp(L, LUA_REGISTRYINDEX, keys.parent->class_key);
-		_interlua_rawgetp(L, LUA_REGISTRYINDEX, keys.parent->static_key);
-		rawsetfield(L, -4, "__parent");
-		rawsetfield(L, -4, "__parent");
-		rawsetfield(L, -4, "__parent");
-	}
 }
 
 NSWrapper NSWrapper::Namespace(const char *name) {
