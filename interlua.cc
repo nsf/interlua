@@ -757,7 +757,7 @@ static class_info *get_class_info_for(lua_State *L, void *key) {
 }
 
 static int userdata_gc(lua_State *L) {
-	Userdata *ud = get_userdata_unchecked(L, 1);
+	auto ud = reinterpret_cast<Userdata*>(lua_touserdata(L, 1));
 	ud->~Userdata();
 	return 0;
 }
@@ -948,10 +948,6 @@ Userdata *get_userdata(lua_State *L, int idx,
 			return nullptr;
 		}
 	}
-}
-
-Userdata *get_userdata_unchecked(lua_State *L, int index) {
-	return (Userdata*)lua_touserdata(L, index);
 }
 
 Error::~Error() {}

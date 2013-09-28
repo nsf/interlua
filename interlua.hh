@@ -214,7 +214,6 @@ public:
 
 Userdata *get_userdata(lua_State *L, int index,
 	void *base_key, void *base_const_key, bool can_be_const);
-Userdata *get_userdata_unchecked(lua_State *L, int index);
 
 template <typename T>
 static inline T *get_class(lua_State *L, int index, bool can_be_const) {
