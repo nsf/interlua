@@ -698,91 +698,142 @@ static inline void recursive_push(lua_State *L, T &&arg, Args &&...args) {
 	recursive_push(L, std::forward<Args>(args)...);
 }
 
-// this function is called from __index
+//============================================================================
+// variable binding helpers
+//============================================================================
+
+// variable getter, contains 'cfunction' which is called directly from __index
+template <typename G> struct get_variable;
+
 template <typename T>
-int get_variable(lua_State *L, funcdata data) {
-	auto p = data.as<T*>();
-	StackOps<T>::Push(L, *p);
-	return 1;
-}
+struct get_variable<T*> {
+	static int cfunction(lua_State *L, funcdata data) {
+		auto p = data.as<T*>();
+		StackOps<T>::Push(L, *p);
+		return 1;
+	}
+};
 
-// this function is called from __newindex
 template <typename T>
-int set_variable(lua_State *L, funcdata data) {
-	auto p = data.as<T*>();
-	*p = StackOps<T>::Get(L, 3);
-	return 0;
-}
+struct get_variable<T (*)()> {
+	static int cfunction(lua_State *L, funcdata data) {
+		auto p = data.as<T (*)()>();
+		StackOps<T>::Push(L, (*p)());
+		return 1;
+	}
+};
 
-// this function is called from __index
+// variable setter, contains 'cfunction' which is called directly from
+// __newindex.
+template <typename S>
+struct set_variable;
+
 template <typename T>
-int get_variable_func(lua_State *L, funcdata data) {
-	auto p = data.as<T (*)()>();
-	StackOps<T>::Push(L, (*p)());
-	return 1;
-}
+struct set_variable<T*> {
+	static int cfunction(lua_State *L, funcdata data) {
+		auto p = data.as<T*>();
+		*p = StackOps<T>::Get(L, 3);
+		return 0;
+	}
+};
 
-// this function is called from __newindex
 template <typename T>
-int set_variable_func(lua_State *L, funcdata data) {
-	auto p = data.as<void (*)(T)>();
-	(*p)(StackOps<T>::Get(L, 3));
-	return 0;
+struct set_variable<void (*)(T)> {
+	static int cfunction(lua_State *L, funcdata data) {
+		auto p = data.as<void (*)(T)>();
+		(*p)(StackOps<T>::Get(L, 3));
+		return 0;
+	}
+};
+
+// common binding helper, works for static property/variable in the class and
+// for property/variable in the namespace
+template <typename G, typename S>
+void variable(lua_State *L, const char *name, G get, S set) {
+	class_info_add_var_getter(L, -1, name,
+		get_variable<G>::cfunction, get);
+
+	if (set != nullptr) {
+		class_info_add_var_setter(L, -1, name,
+			set_variable<S>::cfunction, set);
+	} else {
+		class_info_add_read_only(L, -1, name);
+	}
 }
 
-// this function is called from __index
+//============================================================================
+// property binding helpers
+//============================================================================
+
+// property getter, contains 'cfunction' which is called directly from __index
+// meta method, see specializations below
+template <typename G> struct get_property;
+
 template <typename T, typename U>
-int get_property(lua_State *L, funcdata data) {
-	const T *cls = get_class_unchecked<T>(L, 1);
-	auto mp = data.as<U T::*>();
-	StackOps<U>::Push(L, cls->*mp);
-	return 1;
-}
+struct get_property<U T::*> {
+	static int cfunction(lua_State *L, funcdata data) {
+		const T *cls = get_class_unchecked<T>(L, 1);
+		auto mp = data.as<U T::*>();
+		StackOps<U>::Push(L, cls->*mp);
+		return 1;
+	}
+};
+
+template <typename T, typename U>
+struct get_property<U (*)(const T*)> {
+	static int cfunction(lua_State *L, funcdata data) {
+		const T *cls = get_class_unchecked<T>(L, 1);
+		auto mp = data.as<U (*)(const T*)>();
+		StackOps<U>::Push(L, (*mp)(cls));
+		return 1;
+	}
+};
+
+template <typename T, typename U>
+struct get_property<U (T::*)() const> {
+	static int cfunction(lua_State *L, funcdata data) {
+		const T *cls = get_class_unchecked<T>(L, 1);
+		auto mp = data.as<U (T::*)() const>();
+		StackOps<U>::Push(L, (cls->*mp)());
+		return 1;
+	}
+};
+
+// property setter, contains 'cfunction' which is called directly from
+// __newindex meta method, see specializations below
+template <typename S> struct set_property;
+
+template <typename T, typename U>
+struct set_property<U T::*> {
+	static int cfunction(lua_State *L, funcdata data) {
+		T *cls = get_class_unchecked<T>(L, 1);
+		auto mp = data.as<U T::*>();
+		cls->*mp = StackOps<U>::Get(L, 3);
+		return 0;
+	}
+};
 
 // this function is called from __newindex
 template <typename T, typename U>
-int set_property(lua_State *L, funcdata data) {
-	T *cls = get_class_unchecked<T>(L, 1);
-	auto mp = data.as<U T::*>();
-	cls->*mp = StackOps<U>::Get(L, 3);
-	return 0;
-}
-
-// this function is called from __index
-template <typename T, typename U>
-int get_property_func(lua_State *L, funcdata data) {
-	const T *cls = get_class_unchecked<T>(L, 1);
-	auto mp = data.as<U (*)(const T*)>();
-	StackOps<U>::Push(L, (*mp)(cls));
-	return 1;
-}
+struct set_property<void (*)(T*, U)> {
+	static int cfunction(lua_State *L, funcdata data) {
+		T *cls = get_class_unchecked<T>(L, 1);
+		auto mp = data.as<void (*)(T*, U)>();
+		(*mp)(cls, StackOps<U>::Get(L, 3));
+		return 0;
+	}
+};
 
 // this function is called from __newindex
 template <typename T, typename U>
-int set_property_func(lua_State *L, funcdata data) {
-	T *cls = get_class_unchecked<T>(L, 1);
-	auto mp = data.as<void (*)(T*, U)>();
-	(*mp)(cls, StackOps<U>::Get(L, 3));
-	return 0;
-}
-
-// this function is called from __index
-template <typename T, typename U>
-int get_property_method(lua_State *L, funcdata data) {
-	const T *cls = get_class_unchecked<T>(L, 1);
-	auto mp = data.as<U (T::*)() const>();
-	StackOps<U>::Push(L, (cls->*mp)());
-	return 1;
-}
-
-// this function is called from __newindex
-template <typename T, typename U>
-int set_property_method(lua_State *L, funcdata data) {
-	T *cls = get_class_unchecked<T>(L, 1);
-	auto mp = data.as<void (T::*)(U)>();
-	(cls->*mp)(StackOps<U>::Get(L, 3));
-	return 0;
-}
+struct set_property<void (T::*)(U)> {
+	static int cfunction(lua_State *L, funcdata data) {
+		T *cls = get_class_unchecked<T>(L, 1);
+		auto mp = data.as<void (T::*)(U)>();
+		(cls->*mp)(StackOps<U>::Get(L, 3));
+		return 0;
+	}
+};
 
 //============================================================================
 // Variable Access
@@ -804,6 +855,23 @@ class CWrapper {
 	lua_State *L = nullptr;
 	NSWrapper &parent;
 
+	template <typename G, typename S>
+	void property(const char *name, G get, S set) {
+		class_info_mt_add_var_getter(L, -2, name,
+			get_property<G>::cfunction, get);
+		class_info_mt_add_var_getter(L, -3, name,
+			get_property<G>::cfunction, get);
+
+		class_info_mt_add_const_read_only(L, -3, name);
+
+		if (set != nullptr) {
+			class_info_mt_add_var_setter(L, -2, name,
+				set_property<S>::cfunction, set);
+		} else {
+			class_info_mt_add_read_only(L, -2, name);
+		}
+	}
+
 public:
 	CWrapper() = delete;
 	CWrapper(lua_State *L, NSWrapper &parent): L(L), parent(parent) {}
@@ -821,58 +889,19 @@ public:
 	// getters/setters, but does it need to be restricted in that way?
 	template <typename TG, typename TS = int>
 	CWrapper &Property(const char *name, TG (T::*get)() const, void (T::*set)(TS) = nullptr) {
-		class_info_mt_add_var_getter(L, -2, name,
-			get_property_method<T, TG>, get);
-		class_info_mt_add_var_getter(L, -3, name,
-			get_property_method<T, TG>, get);
-
-		class_info_mt_add_const_read_only(L, -3, name);
-
-		if (set != nullptr) {
-			class_info_mt_add_var_setter(L, -2, name,
-				set_property_method<T, TS>, set);
-		} else {
-			class_info_mt_add_read_only(L, -2, name);
-		}
+		property(name, get, set);
 		return *this;
 	}
 
 	template <typename TG, typename TS = int>
 	CWrapper &Property(const char *name, TG (*get)(const T*), void (*set)(T*, TS) = nullptr) {
-		class_info_mt_add_var_getter(L, -2, name,
-			get_property_func<T, TG>, get);
-		class_info_mt_add_var_getter(L, -3, name,
-			get_property_func<T, TG>, get);
-
-		class_info_mt_add_const_read_only(L, -3, name);
-
-		if (set != nullptr) {
-			class_info_mt_add_var_setter(L, -2, name,
-				set_property_func<T, TS>, set);
-		} else {
-			class_info_mt_add_read_only(L, -2, name);
-		}
+		property(name, get, set);
 		return *this;
 	}
 
 	template <typename U>
 	CWrapper &Variable(const char *name, U T:: *mp, VariableAccess va = ReadWrite) {
-		class_info_mt_add_var_getter(L, -2, name,
-			get_property<T, U>, mp);
-		class_info_mt_add_var_getter(L, -3, name,
-			get_property<T, U>, mp);
-
-		class_info_mt_add_const_read_only(L, -3, name);
-
-		switch (va) {
-		case ReadWrite:
-			class_info_mt_add_var_setter(L, -2, name,
-				set_property<T, U>, mp);
-			break;
-		case ReadOnly:
-			class_info_mt_add_read_only(L, -2, name);
-			break;
-		}
+		property(name, mp, va == ReadWrite ? mp : nullptr);
 		return *this;
 	}
 
@@ -906,18 +935,7 @@ public:
 
 	template <typename U>
 	CWrapper &StaticVariable(const char *name, U *p, VariableAccess va = ReadWrite) {
-		class_info_add_var_getter(L, -1, name,
-			get_variable<U>, p);
-
-		switch (va) {
-		case ReadWrite:
-			class_info_add_var_setter(L, -1, name,
-				set_variable<U>, p);
-			break;
-		case ReadOnly:
-			class_info_add_read_only(L, -1, name);
-			break;
-		}
+		variable(L, name, p, va == ReadWrite ? p : nullptr);
 		return *this;
 	}
 
@@ -926,15 +944,7 @@ public:
 	// template type deduction will fail.
 	template <typename TG, typename TS = int>
 	CWrapper &StaticProperty(const char *name, TG (*get)(), void (*set)(TS) = nullptr) {
-		class_info_add_var_getter(L, -1, name,
-			get_variable_func<TG>, get);
-
-		if (set != nullptr) {
-			class_info_add_var_setter(L, -1, name,
-				set_variable_func<TS>, set);
-		} else {
-			class_info_add_read_only(L, -1, name);
-		}
+		variable(L, name, get, set);
 		return *this;
 	}
 
@@ -1053,18 +1063,7 @@ public:
 				"InterLua doesn't support variables in the global namespace",
 				name);
 		}
-		class_info_add_var_getter(L, -1, name,
-			get_variable<T>, p);
-
-		switch (va) {
-		case ReadWrite:
-			class_info_add_var_setter(L, -1, name,
-				set_variable<T>, p);
-			break;
-		case ReadOnly:
-			class_info_add_read_only(L, -1, name);
-			break;
-		}
+		variable(L, name, p, va == ReadWrite ? p : nullptr);
 		return *this;
 	}
 
@@ -1078,16 +1077,7 @@ public:
 				"InterLua doesn't support properties in the global namespace",
 				name);
 		}
-
-		class_info_add_var_getter(L, -1, name,
-			get_variable_func<TG>, get);
-
-		if (set != nullptr) {
-			class_info_add_var_setter(L, -1, name,
-				set_variable_func<TS>, set);
-		} else {
-			class_info_add_read_only(L, -1, name);
-		}
+		variable(L, name, get, set);
 		return *this;
 	}
 };
