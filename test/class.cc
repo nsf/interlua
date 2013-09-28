@@ -180,14 +180,6 @@ struct Foo {
 	void set_foo(int value) { foo = value; }
 };
 
-void proxy_set_foo(Foo *foo, int value) {
-	foo->foo = value;
-}
-
-int proxy_get_foo(const Foo *foo) {
-	return foo->foo;
-}
-
 STF_TEST("properties") {
 	LUA();
 	InterLua::GlobalNamespace(L).
@@ -249,18 +241,41 @@ STF_TEST("properties") {
 	END();
 }
 
+void proxy_set_foo_ref(Foo &foo, int value) {
+	foo.foo = value;
+}
+
+int proxy_get_foo_ref(const Foo &foo) {
+	return foo.foo;
+}
+
+void proxy_set_foo_ptr(Foo *foo, int value) {
+	foo->foo = value;
+}
+
+int proxy_get_foo_ptr(const Foo *foo) {
+	return foo->foo;
+}
+
 STF_TEST("proxy properties") {
 	LUA();
 	InterLua::GlobalNamespace(L).
 		Class<Foo>("Foo").
 			Constructor<int>().
-			Property("foo", proxy_get_foo, proxy_set_foo).
+			Variable("foo", &Foo::foo, InterLua::ReadOnly).
+			Property("rfoo", proxy_get_foo_ref, proxy_set_foo_ref).
+			Property("pfoo", proxy_get_foo_ptr, proxy_set_foo_ptr).
 		End().
 	End();
-	DO("f = Foo(3); f.foo = f.foo + 4");
+	DO("f = Foo(3); f.rfoo = f.rfoo + 4");
 	{
 		Foo f = InterLua::Global(L, "f");
 		STF_ASSERT(f.foo == 7);
+	}
+	DO("f = Foo(7); f.pfoo = f.pfoo - 1");
+	{
+		Foo f = InterLua::Global(L, "f");
+		STF_ASSERT(f.foo == 6);
 	}
 	STF_ASSERT(lua_gettop(L) == 0);
 	END();

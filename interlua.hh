@@ -737,6 +737,16 @@ struct get_property<U T::*> {
 };
 
 template <typename T, typename U>
+struct get_property<U (*)(const T&)> {
+	static int cfunction(lua_State *L, funcdata data) {
+		const T *cls = get_class_unchecked<T>(L, 1);
+		auto mp = data.as<U (*)(const T&)>();
+		StackOps<U>::Push(L, (*mp)(*cls));
+		return 1;
+	}
+};
+
+template <typename T, typename U>
 struct get_property<U (*)(const T*)> {
 	static int cfunction(lua_State *L, funcdata data) {
 		const T *cls = get_class_unchecked<T>(L, 1);
@@ -770,7 +780,16 @@ struct set_property<U T::*> {
 	}
 };
 
-// this function is called from __newindex
+template <typename T, typename U>
+struct set_property<void (*)(T&, U)> {
+	static int cfunction(lua_State *L, funcdata data) {
+		T *cls = get_class_unchecked<T>(L, 1);
+		auto mp = data.as<void (*)(T&, U)>();
+		(*mp)(*cls, StackOps<U>::Get(L, 3));
+		return 0;
+	}
+};
+
 template <typename T, typename U>
 struct set_property<void (*)(T*, U)> {
 	static int cfunction(lua_State *L, funcdata data) {
@@ -781,7 +800,6 @@ struct set_property<void (*)(T*, U)> {
 	}
 };
 
-// this function is called from __newindex
 template <typename T, typename U>
 struct set_property<void (T::*)(U)> {
 	static int cfunction(lua_State *L, funcdata data) {
@@ -846,6 +864,12 @@ public:
 	// getters/setters, but does it need to be restricted in that way?
 	template <typename TG, typename TS = int>
 	CWrapper &Property(const char *name, TG (T::*get)() const, void (T::*set)(TS) = nullptr) {
+		property(name, get, set);
+		return *this;
+	}
+
+	template <typename TG, typename TS = int>
+	CWrapper &Property(const char *name, TG (*get)(const T&), void (*set)(T&, TS) = nullptr) {
 		property(name, get, set);
 		return *this;
 	}
