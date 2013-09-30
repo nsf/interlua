@@ -356,11 +356,12 @@ public:
 		if (r.msize == 0)
 			return *this;
 
-		char *newdata = (char*)xmalloc(r.msize+1);
-		strncpy(newdata, r.mdata, r.msize);
-		newdata[r.msize-1] = '\0';
+		const size_t s = r.size();
+		char *newdata = (char*)xmalloc(s+1);
+		strncpy(newdata, r.mdata, s);
+		newdata[s-1] = '\0';
 
-		msize = r.msize | persistence_bit;
+		msize = s | persistence_bit;
 		mdata = newdata;
 		return *this;
 	}
