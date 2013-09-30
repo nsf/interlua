@@ -266,6 +266,7 @@ public:
 		}
 		mdata = nullptr;
 		msize = 0;
+		mhash = 0;
 	}
 
 	string(const char *str) {
