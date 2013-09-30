@@ -646,8 +646,6 @@ void stack_dump(lua_State *L) {
 
 // universal index metamethod, works for namespaces and all kinds of classes
 static int index_meta_method(lua_State *L) {
-	lua_getmetatable(L, 1); // push metatable of arg 1
-
 	// get arg 2 contents and the class info from the metatable
 	size_t len = 0;
 	const char *strdata = lua_tolstring(L, 2, &len);
@@ -657,8 +655,7 @@ static int index_meta_method(lua_State *L) {
 	}
 	string str {strdata, len, string::temporary};
 	str.prehash();
-	lua_rawgeti(L, -1, 1);
-	auto cip = to_class_info(L, -1);
+	auto cip = to_class_info(L, lua_upvalueindex(1));
 
 	// use class info to retrieve the function or execute the getter
 	bool parent = false;
@@ -678,11 +675,11 @@ static int index_meta_method(lua_State *L) {
 		switch (mi.type) {
 		case method_function:
 			if (parent) {
-				_interlua_rawgetp(L,
-					LUA_REGISTRYINDEX, cip->class_id);
+				_interlua_rawgetp(L, LUA_REGISTRYINDEX, cip->class_id);
 				lua_rawgeti(L, -1, mi.func_index);
 			} else {
-				lua_rawgeti(L, -2, mi.func_index);
+				lua_rawgeti(L, lua_upvalueindex(2),
+					mi.func_index);
 			}
 			return 1;
 		case method_tter:
@@ -694,8 +691,6 @@ static int index_meta_method(lua_State *L) {
 }
 
 static int newindex_meta_method(lua_State *L) {
-	lua_getmetatable(L, 1); // push metatable of arg 1
-
 	// get arg 2 contents and the class info from the metatable
 	size_t len = 0;
 	const char *strdata = lua_tolstring(L, 2, &len);
@@ -704,8 +699,7 @@ static int newindex_meta_method(lua_State *L) {
 	}
 	string str {strdata, len, string::temporary};
 	str.prehash();
-	lua_rawgeti(L, -1, 1);
-	auto cip = to_class_info(L, -1);
+	auto cip = to_class_info(L, lua_upvalueindex(1));
 
 	for (;;) {
 		if (!cip) {
@@ -733,11 +727,18 @@ static int newindex_meta_method(lua_State *L) {
 	}
 }
 
+// assumes that top of the stack looks like this:
+// -1: class_info
+// -2: metatable
 static void set_common_metamethods(lua_State *L) {
-	lua_pushcfunction(L, index_meta_method);
-	rawsetfield(L, -2, "__index");
-	lua_pushcfunction(L, newindex_meta_method);
-	rawsetfield(L, -2, "__newindex");
+	lua_pushvalue(L, -1);
+	lua_pushvalue(L, -3);
+	lua_pushcclosure(L, index_meta_method, 2);
+	rawsetfield(L, -3, "__index");
+	lua_pushvalue(L, -1);
+	lua_pushvalue(L, -3);
+	lua_pushcclosure(L, newindex_meta_method, 2);
+	rawsetfield(L, -3, "__newindex");
 }
 
 static class_info *get_class_info_for(lua_State *L, void *key) {
@@ -772,7 +773,6 @@ void register_class_tables(lua_State *L, const char *name, const class_keys &key
 	lua_newtable(L);
 	lua_pushfstring(L, "const %s", name);
 	rawsetfield(L, -2, "__type");
-	set_common_metamethods(L);
 	push_class_info(L, {
 		keys.const_key,
 		keys.parent
@@ -780,6 +780,7 @@ void register_class_tables(lua_State *L, const char *name, const class_keys &key
 			: nullptr,
 		true,
 	});
+	set_common_metamethods(L);
 	lua_rawseti(L, -2, 1);
 
 	// -- class table --
@@ -787,7 +788,6 @@ void register_class_tables(lua_State *L, const char *name, const class_keys &key
 	lua_newtable(L);
 	lua_pushstring(L, name);
 	rawsetfield(L, -2, "__type");
-	set_common_metamethods(L);
 	push_class_info(L, {
 		keys.class_key,
 		keys.parent
@@ -795,6 +795,7 @@ void register_class_tables(lua_State *L, const char *name, const class_keys &key
 			: nullptr,
 		false,
 	});
+	set_common_metamethods(L);
 	lua_rawseti(L, -2, 1);
 
 	// a pointer to the const table, mutable value can become a const value
@@ -806,7 +807,6 @@ void register_class_tables(lua_State *L, const char *name, const class_keys &key
 	lua_newtable(L);
 	lua_pushvalue(L, -1);
 	lua_setmetatable(L, -2);
-	set_common_metamethods(L);
 	push_class_info(L, {
 		keys.static_key,
 		keys.parent
@@ -814,6 +814,7 @@ void register_class_tables(lua_State *L, const char *name, const class_keys &key
 			: nullptr,
 		false,
 	});
+	set_common_metamethods(L);
 	lua_rawseti(L, -2, 1);
 
 	// a pointer to the class table, we need this in Class registration
@@ -851,9 +852,9 @@ NSWrapper NSWrapper::Namespace(const char *name) {
 	lua_pushvalue(L, -1);
 	lua_setmetatable(L, -2);
 
+	push_class_info(L, {nullptr, nullptr, false});
 	set_common_metamethods(L);
 
-	push_class_info(L, {nullptr, nullptr, false});
 	lua_rawseti(L, -2, 1);
 
 	// namespace[name] = table
