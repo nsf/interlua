@@ -900,17 +900,21 @@ public:
 		return *this;
 	}
 
-	template <typename FP>
-	CWrapper &CFunction(const char *name, FP fp) {
+	CWrapper &CFunction(const char *name, int (T::*fp)(lua_State*) const) {
+		using FP = int (T::*)(lua_State*) const;
 		*(FP*)lua_newuserdata(L, sizeof(fp)) = fp;
 		lua_pushcclosure(L, member_cfunction<FP>::cfunction, 1);
-		if (is_const_member_function<FP>::value) {
-			lua_pushvalue(L, -1);
-			class_info_mt_add_function(L, -4, name);
-			class_info_mt_add_function(L, -4, name);
-		} else {
-			class_info_mt_add_function(L, -3, name);
-		}
+		lua_pushvalue(L, -1);
+		class_info_mt_add_function(L, -4, name);
+		class_info_mt_add_function(L, -4, name);
+		return *this;
+	}
+
+	CWrapper &CFunction(const char *name, int (T::*fp)(lua_State*)) {
+		using FP = int (T::*)(lua_State*);
+		*(FP*)lua_newuserdata(L, sizeof(fp)) = fp;
+		lua_pushcclosure(L, member_cfunction<FP>::cfunction, 1);
+		class_info_mt_add_function(L, -3, name);
 		return *this;
 	}
 
