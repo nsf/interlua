@@ -236,6 +236,28 @@ static void *xmalloc(size_t n) {
 	return out;
 }
 
+static char *vasprintf(const char *format, va_list va) {
+	va_list va2;
+	va_copy(va2, va);
+
+	int n = std::vsnprintf(nullptr, 0, format, va2);
+	va_end(va2);
+	if (n < 0)
+		die("null vsnprintf error");
+	if (n == 0) {
+		char *buf = reinterpret_cast<char*>(xmalloc(1));
+		buf[0] = '\0';
+		return buf;
+	}
+
+	char *buf = reinterpret_cast<char*>(xmalloc(n+1));
+	int nw = std::vsnprintf(buf, n+1, format, va);
+	if (n != nw)
+		die("vsnprintf failed to write n bytes");
+
+	return buf;
+}
+
 // Our own string class, it's not fancy at all, because all we need is a
 // storage for hash map keys. The reason to use it instead of std::string is
 // because if you use std::string, every hash map lookup may end up doing an
@@ -953,39 +975,38 @@ Userdata *get_userdata(lua_State *L, int idx,
 	}
 }
 
-Error::~Error() {}
-
-void Error::Set(int code, const char*) {
-	this->code = code;
-}
-
-const char *Error::What() const {
-	return "";
-}
-
-VerboseError::~VerboseError() {
+Error::~Error() {
 	if (message)
-		std::free(message);
+		free(message);
 }
 
-void VerboseError::Set(int code, const char *msg) {
-	this->code = code;
-
+void Error::Clear() {
 	if (message)
-		std::free(message);
-	message = (char*)std::malloc(std::strlen(msg)+1);
-	if (!message)
-		die("malloc failure");
-	std::strcpy(message, msg);
+		free(message);
+
+	code = _INTERLUA_OK;
+	message = nullptr;
 }
 
-const char *VerboseError::What() const {
-	return message ? message : "";
-}
-
-void AbortError::Set(int code, const char *msg) {
+void Error::Set(int code, const char *format, ...) {
 	this->code = code;
-	std::fprintf(stderr, "PANIC (%d): %s\n", code, msg);
+	if (verbosity == Quiet)
+		return;
+
+	va_list va;
+	va_start(va, format);
+	message = vasprintf(format, va);
+	va_end(va);
+}
+
+void AbortError::Set(int code, const char *format, ...) {
+	this->code = code;
+	std::fprintf(stderr, "INTERLUA ABORT (%d): ", code);
+	va_list va;
+	va_start(va, format);
+	std::vfprintf(stderr, format, va);
+	va_end(va);
+	std::fprintf(stderr, "\n");
 	std::abort();
 }
 

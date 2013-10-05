@@ -52,7 +52,7 @@ STF_TEST("Ref::operator()") {
 
 		auto bad = InterLua::Global(L, "bad");
 		STF_ASSERT(!bad.IsNil());
-		InterLua::VerboseError err;
+		InterLua::Error err;
 		bad(1, 2, &err);
 		if (!err) {
 			STF_ERRORF("error expected");

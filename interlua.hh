@@ -428,31 +428,34 @@ _stack_ops_bool(const bool&)
 // Errors
 //============================================================================
 
-class Error {
-protected:
-	int code = _INTERLUA_OK;
-
-public:
-	virtual ~Error();
-	int Code() const { return code; }
-	virtual void Set(int code, const char*);
-	virtual const char *What() const;
-	explicit operator bool() const { return this->code != _INTERLUA_OK; }
+enum ErrorVerbosity {
+	Quiet,
+	Verbose,
 };
 
-class VerboseError : public Error {
+class Error {
 protected:
+	ErrorVerbosity verbosity = Verbose;
+	int code = _INTERLUA_OK;
 	char *message = nullptr;
 
 public:
-	~VerboseError() override;
-	void Set(int code, const char *msg) override;
-	const char *What() const override;
+	Error() = default;
+	explicit Error(ErrorVerbosity v): verbosity(v) {}
+	virtual ~Error();
+
+	void Clear();
+	int Code() const { return code; }
+	ErrorVerbosity Verbosity() const { return verbosity; }
+	const char *What() const { return message ? message : ""; }
+	explicit operator bool() const { return this->code != _INTERLUA_OK; }
+
+	virtual void Set(int code, const char *format, ...);
 };
 
 class AbortError : public Error {
 public:
-	void Set(int code, const char *msg) override;
+	void Set(int code, const char *format, ...) override;
 };
 
 extern AbortError DefaultError;
@@ -467,10 +470,8 @@ struct StackOps<T> {					\
 };
 
 _stack_ops_ignore_push(Error*)
-_stack_ops_ignore_push(VerboseError*)
 _stack_ops_ignore_push(AbortError*)
 _stack_ops_ignore_push(Error*&)
-_stack_ops_ignore_push(VerboseError*&)
 _stack_ops_ignore_push(AbortError*&)
 
 #undef _stack_ops_ignore_push

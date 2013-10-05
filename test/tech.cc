@@ -83,7 +83,7 @@ STF_TEST("create_class_tables") {
 	)*****";
 	DO(init);
 	{
-		InterLua::VerboseError err;
+		InterLua::Error err;
 		auto check = InterLua::Global(L, "check");
 		check(&err);
 		if (err) {
@@ -587,24 +587,24 @@ STF_TEST("_stack_ops_char and _stack_ops_bool") {
 
 // Error
 STF_TEST("Error") {
-	InterLua::Error err;
+	InterLua::Error err(InterLua::Quiet);
 	STF_ASSERT(err.Code() == _INTERLUA_OK);
 	STF_ASSERT(!err);
-	err.Set(5, "message");
+	err.Set(5, "message: %d", 7);
 	STF_ASSERT(err.Code() == 5);
 	STF_ASSERT(strcmp(err.What(), "") == 0);
 	STF_ASSERT(err);
 }
 
-// VerboseError
-STF_TEST("VerboseError") {
+// Verbose Error
+STF_TEST("Verbose Error") {
 	// same as Error, but actually stores the message
-	InterLua::VerboseError err;
+	InterLua::Error err(InterLua::Verbose);
 	STF_ASSERT(err.Code() == _INTERLUA_OK);
 	STF_ASSERT(!err);
-	err.Set(5, "message");
+	err.Set(5, "message: %d", 7);
 	STF_ASSERT(err.Code() == 5);
-	STF_ASSERT(strcmp(err.What(), "message") == 0);
+	STF_ASSERT(strcmp(err.What(), "message: 7") == 0);
 	STF_ASSERT(err);
 }
 
@@ -613,13 +613,10 @@ STF_TEST("_stack_ops_ignore_push") {
 	using namespace InterLua;
 	LUA();
 	StackOps<Error*>::Push(L, nullptr);
-	StackOps<VerboseError*>::Push(L, nullptr);
 	StackOps<AbortError*>::Push(L, nullptr);
 	Error *e = nullptr;
-	VerboseError *ve = nullptr;
 	AbortError *ae = nullptr;
 	StackOps<Error*&>::Push(L, e);
-	StackOps<VerboseError*&>::Push(L, ve);
 	StackOps<AbortError*&>::Push(L, ae);
 	STF_ASSERT(lua_gettop(L) == 0);
 	END();
