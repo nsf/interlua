@@ -10,23 +10,22 @@
 namespace InterLua {
 
 struct or_die_t {};
-const or_die_t or_die;
+const or_die_t or_die = {};
 
 } // namespace InterLua
 
-static void *xmalloc(size_t n) {
-	void *out = operator new(n, std::nothrow);
+void* operator new(size_t size, const InterLua::or_die_t&) noexcept {
+	void *out = operator new(size, std::nothrow);
 	if (!out)
 		InterLua::die("InterLua: out of memory");
 	return out;
 }
 
-void* operator new(size_t size, const InterLua::or_die_t&) noexcept {
-	return xmalloc(size);
-}
-
 void *operator new[](size_t size, const InterLua::or_die_t&) noexcept {
-	return xmalloc(size);
+	void *out = operator new[](size, std::nothrow);
+	if (!out)
+		InterLua::die("InterLua: out of memory");
+	return out;
 }
 
 namespace InterLua {
@@ -759,8 +758,7 @@ static int newindex_meta_method(lua_State *L) {
 
 	for (;;) {
 		if (!cip) {
-			return luaL_error(L, "no writable variable '%s'",
-				lua_tostring(L, 2));
+			return luaL_error(L, "no writable variable '%s'", strdata);
 		}
 		auto it = cip->set_table.find(str);
 		if (it == cip->set_table.end()) {
