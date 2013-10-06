@@ -5,8 +5,63 @@
 #include <cstring>
 #include <cstdarg>
 #include <unordered_map>
+#include <memory>
 
 namespace InterLua {
+
+struct or_die_t {};
+const or_die_t or_die;
+
+} // namespace InterLua
+
+static void *xmalloc(size_t n) {
+	void *out = operator new(n, std::nothrow);
+	if (!out)
+		InterLua::die("InterLua: out of memory");
+	return out;
+}
+
+void* operator new(size_t size, const InterLua::or_die_t&) noexcept {
+	return xmalloc(size);
+}
+
+void *operator new[](size_t size, const InterLua::or_die_t&) noexcept {
+	return xmalloc(size);
+}
+
+namespace InterLua {
+
+using cstring = std::unique_ptr<char[]>;
+
+static cstring vasprintf(const char *format, va_list va) {
+	va_list va2;
+	va_copy(va2, va);
+
+	int n = std::vsnprintf(nullptr, 0, format, va2);
+	va_end(va2);
+	if (n < 0)
+		die("null vsnprintf error");
+	if (n == 0) {
+		char *buf = new (or_die) char[1];
+		buf[0] = '\0';
+		return cstring{buf};
+	}
+
+	char *buf = new (or_die) char[n+1];
+	int nw = std::vsnprintf(buf, n+1, format, va);
+	if (n != nw)
+		die("vsnprintf failed to write n bytes");
+
+	return cstring{buf};
+}
+
+static cstring asprintf(const char *format, ...) {
+	va_list va;
+	va_start(va, format);
+	auto s = vasprintf(format, va);
+	va_end(va);
+	return s;
+}
 
 //============================================================================
 // string hash taken from libc++, uses murmur2 and cityhash64
@@ -229,35 +284,6 @@ _Size __murmur2_or_cityhash<_Size, 64>::operator()(const void* __key, _Size __le
 // string
 //============================================================================
 
-static void *xmalloc(size_t n) {
-	void *out = malloc(n);
-	if (!out)
-		die("InterLua: out of memory");
-	return out;
-}
-
-static char *vasprintf(const char *format, va_list va) {
-	va_list va2;
-	va_copy(va2, va);
-
-	int n = std::vsnprintf(nullptr, 0, format, va2);
-	va_end(va2);
-	if (n < 0)
-		die("null vsnprintf error");
-	if (n == 0) {
-		char *buf = reinterpret_cast<char*>(xmalloc(1));
-		buf[0] = '\0';
-		return buf;
-	}
-
-	char *buf = reinterpret_cast<char*>(xmalloc(n+1));
-	int nw = std::vsnprintf(buf, n+1, format, va);
-	if (n != nw)
-		die("vsnprintf failed to write n bytes");
-
-	return buf;
-}
-
 // Our own string class, it's not fancy at all, because all we need is a
 // storage for hash map keys. The reason to use it instead of std::string is
 // because if you use std::string, every hash map lookup may end up doing an
@@ -284,7 +310,7 @@ public:
 
 	void clear() {
 		if (is_persistent()) {
-			free((void*)mdata);
+			delete[] mdata;
 		}
 		mdata = nullptr;
 		msize = 0;
@@ -299,7 +325,7 @@ public:
 		if (len == 0)
 			return;
 
-		char *newdata = (char*)xmalloc(len+1);
+		char *newdata = new (or_die) char[len+1];
 		strcpy(newdata, str);
 
 		msize = len | persistence_bit;
@@ -325,7 +351,7 @@ public:
 		if (len <= 0)
 			return;
 
-		char *newdata = (char*)xmalloc(len+1);
+		char *newdata = new (or_die) char[len+1];
 		strncpy(newdata, str, len);
 		newdata[len-1] = '\0';
 
@@ -357,7 +383,7 @@ public:
 			r.mdata = nullptr;
 			r.msize = 0;
 		} else {
-			char *newdata = (char*)xmalloc(r.msize+1);
+			char *newdata = new (or_die) char[r.msize+1];
 			strncpy(newdata, r.mdata, r.msize);
 			newdata[r.msize-1] = '\0';
 
@@ -368,11 +394,14 @@ public:
 
 	~string() {
 		if (is_persistent()) {
-			free((void*)mdata);
+			delete[] mdata;
 		}
 	}
 
 	string &operator=(const string &r) {
+		if (this == &r)
+			return *this;
+
 		clear();
 		if (r.mdata == nullptr)
 			return *this;
@@ -380,7 +409,7 @@ public:
 			return *this;
 
 		const size_t s = r.size();
-		char *newdata = (char*)xmalloc(s+1);
+		char *newdata = new (or_die) char[s+1];
 		strncpy(newdata, r.mdata, s);
 		newdata[s-1] = '\0';
 
@@ -390,6 +419,9 @@ public:
 	}
 
 	string &operator=(string &&r) {
+		if (this == &r)
+			return *this;
+
 		clear();
 		if (r.mdata == nullptr)
 			return *this;
@@ -402,7 +434,7 @@ public:
 			r.mdata = nullptr;
 			r.msize = 0;
 		} else {
-			char *newdata = (char*)xmalloc(r.msize+1);
+			char *newdata = new (or_die) char[r.msize+1];
 			strncpy(newdata, r.mdata, r.msize);
 			newdata[r.msize-1] = '\0';
 
@@ -890,28 +922,36 @@ NSWrapper NSWrapper::Namespace(const char *name) {
 Userdata::~Userdata() {}
 
 // expects 'absidx' metatable on top of the stack
-static void get_userdata_error(lua_State *L, int absidx, int idx, void *base_class_key, const char *str) {
+static void get_userdata_error(lua_State *L, int absidx, int idx,
+	void *base_class_key, const char *str, Error *err = &DefaultError)
+{
+	int popn = 1; // metatable
 	const char *got = nullptr;
 	if (lua_isnil(L, -1)) {
 		got = lua_typename(L, lua_type(L, absidx));
 	} else {
 		rawgetfield(L, -1, "__type");
 		got = lua_tostring(L, -1);
+		popn++; // metatable.__type
 	}
 
 	_interlua_rawgetp(L, LUA_REGISTRYINDEX, base_class_key);
+	popn++; // base_class_key
 	if (lua_isnil(L, -1)) {
-		luaL_argerror(L, idx,
-			"trying to get an unregistered base class value");
+		argerror(L, idx, "trying to get an unregistered base class value", err);
+		lua_pop(L, popn);
+		return;
 	}
 	rawgetfield(L, -1, "__type");
+	popn++; // base_class_key.__type
 	const char *expected = lua_tostring(L, -1);
-	const char *msg = lua_pushfstring(L, str, expected, got);
-	luaL_argerror(L, idx, msg);
+	auto msg = asprintf(str, expected, got);
+	argerror(L, idx, msg.get(), err);
+	lua_pop(L, popn);
 }
 
 Userdata *get_userdata(lua_State *L, int idx,
-	void *base_key, void *base_const_key, bool can_be_const)
+	void *base_key, void *base_const_key, bool can_be_const, Error *err)
 {
 	const int absidx = _interlua_absindex(L, idx);
 
@@ -924,7 +964,7 @@ Userdata *get_userdata(lua_State *L, int idx,
 		// perhaps just a wrong argument (string, number, etc.)
 		lua_pushnil(L);
 		get_userdata_error(L, absidx, idx, base_key,
-			"not userdata, class \"%s\" expected, got \"%s\" instead");
+			"not userdata, class \"%s\" expected, got \"%s\" instead", err);
 		return nullptr;
 	}
 
@@ -932,7 +972,7 @@ Userdata *get_userdata(lua_State *L, int idx,
 	if (!lua_getmetatable(L, idx)) {
 		lua_pushnil(L);
 		get_userdata_error(L, absidx, idx, base_key,
-			"interlua class \"%s\" expected, got foreign userdata instead");
+			"interlua class \"%s\" expected, got foreign userdata instead", err);
 		return nullptr;
 	}
 
@@ -942,7 +982,8 @@ Userdata *get_userdata(lua_State *L, int idx,
 	if (!cip) {
 		lua_pushnil(L);
 		get_userdata_error(L, absidx, idx, base_key,
-			"interlua class \"%s\" expected, got foreign userdata instead");
+			"interlua class \"%s\" expected, got foreign userdata instead", err);
+		lua_pop(L, 2); // pop the class_info and the metatable
 		return nullptr;
 	}
 
@@ -950,9 +991,10 @@ Userdata *get_userdata(lua_State *L, int idx,
 	if (cip->is_const && !can_be_const) {
 		// if the userdata is const and we need a mutable one, that's
 		// an error
-		lua_insert(L, -2);
+		lua_insert(L, -2); // push the metatable on the top of the stack
 		get_userdata_error(L, absidx, idx, base_key,
-			"mutable class \"%s\" required, got \"%s\" instead");
+			"mutable class \"%s\" required, got \"%s\" instead", err);
+		lua_pop(L, 1); // pop the class_info
 		return nullptr;
 	}
 
@@ -962,45 +1004,44 @@ Userdata *get_userdata(lua_State *L, int idx,
 
 	for (;;) {
 		if (cip->class_id == base_key) {
-			lua_pop(L, 2);
+			lua_pop(L, 2); // pop the class_info and the metatable
 			return ud;
 		}
 		cip = cip->parent;
 		if (cip == nullptr) {
 			lua_insert(L, -2);
 			get_userdata_error(L, absidx, idx, base_key,
-				"class mismatch, \"%s\" expected, got \"%s\" instead");
+				"class mismatch, \"%s\" expected, got \"%s\" instead", err);
+			lua_pop(L, 1); // pop the class_info
 			return nullptr;
 		}
 	}
 }
 
 Error::~Error() {
-	if (message)
-		free(message);
+	delete[] message;
 }
 
-void Error::Clear() {
-	if (message)
-		free(message);
-
+void Error::Reset() {
+	delete[] message;
 	code = _INTERLUA_OK;
 	message = nullptr;
 }
 
 void Error::Set(int code, const char *format, ...) {
+	Reset();
+
 	this->code = code;
 	if (verbosity == Quiet)
 		return;
 
 	va_list va;
 	va_start(va, format);
-	message = vasprintf(format, va);
+	message = vasprintf(format, va).release();
 	va_end(va);
 }
 
 void AbortError::Set(int code, const char *format, ...) {
-	this->code = code;
 	std::fprintf(stderr, "INTERLUA ABORT (%d): ", code);
 	va_list va;
 	va_start(va, format);
@@ -1011,5 +1052,80 @@ void AbortError::Set(int code, const char *format, ...) {
 }
 
 AbortError DefaultError;
+
+// similar to luaL_where call with level == 1
+static cstring where(lua_State *L) {
+	lua_Debug ar;
+	if (lua_getstack(L, 1, &ar)) {
+		lua_getinfo(L, "Sl", &ar);
+		if (ar.currentline > 0) {
+			return asprintf("%s:%d: ",
+				ar.short_src, ar.currentline);
+		}
+	}
+	return asprintf("");
+}
+
+static void tag_error(lua_State *L, int narg, int tag, Error *err) {
+	const char *expected = lua_typename(L, tag);
+	auto msg = asprintf("%s expected, got %s",
+		expected, luaL_typename(L, narg));
+	argerror(L, narg, msg.get(), err);
+}
+
+void argerror(lua_State *L, int narg, const char *extra, Error *err) {
+	if (err->Verbosity() == Quiet) {
+		err->Set(LUA_ERRRUN, "");
+		return;
+	}
+
+	lua_Debug ar;
+	auto loc = where(L);
+	if (!lua_getstack(L, 0, &ar)) {
+		// no stack frame?
+		err->Set(LUA_ERRRUN, "%s" "bad argument: #%d (%s)",
+			loc.get(), narg, extra);
+		return;
+	}
+	lua_getinfo(L, "n", &ar);
+	if (strcmp(ar.namewhat, "method") == 0) {
+		narg--; // do not count 'self'
+		if (narg == 0) {
+			err->Set(LUA_ERRRUN, "%s" "calling " LUA_QS " on bad self (%s)",
+				loc.get(), ar.name, extra);
+			return;
+		}
+	}
+	if (ar.name == nullptr)
+		ar.name = "?";
+	err->Set(LUA_ERRRUN, "%s" "bad argument #%d to " LUA_QS " (%s)",
+		loc.get(), narg, ar.name, extra);
+}
+
+void checkinteger(lua_State *L, int narg, Error *err) {
+	int isnum;
+	lua_tointegerx(L, narg, &isnum);
+	if (!isnum)
+		tag_error(L, narg, LUA_TNUMBER, err);
+}
+
+void checknumber(lua_State *L, int narg, Error *err) {
+	int isnum;
+	lua_tonumberx(L, narg, &isnum);
+	if (!isnum)
+		tag_error(L, narg, LUA_TNUMBER, err);
+}
+
+void checkstring(lua_State *L, int narg, Error *err) {
+	const char *s = lua_tolstring(L, narg, nullptr);
+	if (!s)
+		tag_error(L, narg, LUA_TSTRING, err);
+}
+
+void lerror(lua_State *L, ManualError *err) {
+	lua_pushstring(L, err->Get()->What());
+	err->Destroy();
+	lua_error(L);
+}
 
 } // namespace InterLua

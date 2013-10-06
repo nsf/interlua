@@ -184,6 +184,74 @@ void class_info_mt_add_const_read_only(lua_State *L, int index, const char *name
 void class_info_mt_add_function(lua_State *L, int index, const char *name);
 
 //============================================================================
+// Errors
+//============================================================================
+
+enum ErrorVerbosity {
+	Quiet,
+	Verbose,
+};
+
+class Error {
+protected:
+	ErrorVerbosity verbosity = Verbose;
+	int code = _INTERLUA_OK;
+	char *message = nullptr;
+
+public:
+	Error() = default;
+	explicit Error(ErrorVerbosity v): verbosity(v) {}
+	virtual ~Error();
+
+	void Reset();
+	int Code() const { return code; }
+	ErrorVerbosity Verbosity() const { return verbosity; }
+	const char *What() const { return message ? message : ""; }
+	explicit operator bool() const { return this->code != _INTERLUA_OK; }
+
+	virtual void Set(int code, const char *format, ...);
+};
+
+class AbortError : public Error {
+public:
+	void Set(int code, const char *format, ...) override;
+};
+
+extern AbortError DefaultError;
+
+// helper for using Error as a C object (we'll be using it in a potential
+// longjmp context, hence we need to construct and deconstruct it manually)
+struct ManualError {
+	uint8_t storage[sizeof(Error)];
+
+	void Init() {
+		new (&storage) Error;
+	}
+
+	void Destroy() {
+		Get()->~Error();
+	}
+
+	Error *Get() { return reinterpret_cast<Error*>(storage); }
+};
+
+//============================================================================
+// Error helpers
+//============================================================================
+
+// function similar to many luaL_ functions, with two differences:
+// 1. They only check for an error without returning anything.
+// 2. And instead of raising a lua error, they call err->Set(...).
+void argerror(lua_State *L, int narg, const char *extra, Error *err = &DefaultError);
+void checkinteger(lua_State *L, int narg, Error *err = &DefaultError);
+void checknumber(lua_State *L, int narg, Error *err = &DefaultError);
+void checkstring(lua_State *L, int narg, Error *err = &DefaultError);
+
+// This function calls lua_error at the end, therefore it never returns. It
+// will destroy the ManualError object.
+void lerror(lua_State *L, ManualError *err);
+
+//============================================================================
 // Userdata
 //============================================================================
 
@@ -213,20 +281,41 @@ public:
 };
 
 Userdata *get_userdata(lua_State *L, int index,
-	void *base_key, void *base_const_key, bool can_be_const);
+	void *base_key, void *base_const_key, bool can_be_const,
+	Error *err = &DefaultError);
 
 template <typename T>
-static inline T *get_class(lua_State *L, int index, bool can_be_const) {
-	return reinterpret_cast<T*>(get_userdata(
-		L, index,
+static void check_class(lua_State *L, int index,
+	bool can_be_const, Error *err = &DefaultError)
+{
+	get_userdata(L, index,
 		ClassKey<T>::Class(), ClassKey<T>::Const(),
-		can_be_const
-	)->Data());
+		can_be_const, err);
 }
 
 template <typename T>
 static inline T *get_class_unchecked(lua_State *L, int index) {
 	return (T*)((Userdata*)lua_touserdata(L, index))->Data();
+}
+
+template <typename T>
+static inline T *get_class(lua_State *L, int index, bool can_be_const) {
+	ManualError merr;
+	merr.Init();
+
+	Error *err = merr.Get();
+	auto ud = get_userdata(L, index,
+		ClassKey<T>::Class(), ClassKey<T>::Const(),
+		can_be_const, err);
+	if (*err) {
+		lua_pushstring(L, err->What());
+		merr.Destroy();
+		lua_error(L);
+	} else {
+		merr.Destroy();
+	}
+
+	return reinterpret_cast<T*>(ud->Data());
 }
 
 //============================================================================
@@ -264,9 +353,13 @@ struct StackOps {
 		new (mem) UserdataValue<PURE_T>(std::forward<T>(value));
 	}
 
-	static inline T Get(lua_State *L, int index) {
+	static inline void Check(lua_State *L, int index, Error *err) {
 		// the class cannot be const, when T isn't const
-		return *get_class<PURE_T>(L, index, std::is_const<NOREF_T>::value);
+		check_class<PURE_T>(L, index, std::is_const<NOREF_T>::value, err);
+	}
+
+	static inline T Get(lua_State *L, int index) {
+		return *get_class_unchecked<PURE_T>(L, index);
 	}
 };
 
@@ -287,9 +380,12 @@ struct StackOps<T*> {
 		lua_setmetatable(L, -2);
 		new (mem) UserdataPointer<T>(value);
 	}
-	static inline T *Get(lua_State *L, int index) {
+	static inline void Check(lua_State *L, int index, Error *err) {
 		// the class cannot be const, when T isn't const
-		return get_class<PURE_T>(L, index, std::is_const<T>::value);
+		check_class<PURE_T>(L, index, std::is_const<T>::value, err);
+	}
+	static inline T *Get(lua_State *L, int index) {
+		return get_class_unchecked<PURE_T>(L, index);
 	}
 };
 
@@ -303,20 +399,24 @@ struct StackOps<std::nullptr_t> {
 
 template <>
 struct StackOps<lua_State*> {
+	static inline void Check(lua_State*, int, Error*) {}
 	static inline lua_State *Get(lua_State *L, int) {
 		return L;
 	}
 };
 
-#define _stack_ops_integer(TT, T)				\
-template <>							\
-struct StackOps<TT> {						\
-	static inline void Push(lua_State *L, T value) {	\
-		lua_pushinteger(L, value);			\
-	}							\
-	static inline T Get(lua_State *L, int index) {		\
-		return luaL_checkinteger(L, index);		\
-	}							\
+#define _stack_ops_integer(TT, T)					\
+template <>								\
+struct StackOps<TT> {							\
+	static inline void Push(lua_State *L, T value) {		\
+		lua_pushinteger(L, value);				\
+	}								\
+	static inline void Check(lua_State *L, int index, Error *err) {	\
+		checkinteger(L, index, err);				\
+	}								\
+	static inline T Get(lua_State *L, int index) {			\
+		return luaL_checkinteger(L, index);			\
+	}								\
 };
 
 _stack_ops_integer(signed char, signed char)
@@ -350,15 +450,18 @@ _stack_ops_integer(const unsigned long&, unsigned long)
 #undef _stack_ops_integer
 
 
-#define _stack_ops_float(TT, T)					\
-template <>							\
-struct StackOps<TT> {						\
-	static inline void Push(lua_State *L, T value) {	\
-		lua_pushnumber(L, value);			\
-	}							\
-	static inline T Get(lua_State *L, int index) {		\
-		return luaL_checknumber(L, index);		\
-	}							\
+#define _stack_ops_float(TT, T)						\
+template <>								\
+struct StackOps<TT> {							\
+	static inline void Push(lua_State *L, T value) {		\
+		lua_pushnumber(L, value);				\
+	}								\
+	static inline void Check(lua_State *L, int index, Error *err) {	\
+		checknumber(L, index, err);				\
+	}								\
+	static inline T Get(lua_State *L, int index) {			\
+		return luaL_checknumber(L, index);			\
+	}								\
 };
 
 _stack_ops_float(float, float)
@@ -378,6 +481,10 @@ static inline void Push(lua_State *L, const char *str) {			\
 	else									\
 		lua_pushnil(L);							\
 }										\
+static inline void Check(lua_State *L, int index, Error *err) {			\
+	if (!lua_isnil(L, index))						\
+		checkstring(L, index, err);					\
+}										\
 static inline const char *Get(lua_State *L, int index) {			\
 	return lua_isnil(L, index) ? nullptr : luaL_checkstring(L, index);	\
 }
@@ -389,16 +496,19 @@ template <int N> struct StackOps<const char (&)[N]> { _stack_ops_cstr_impl };
 #undef _stack_ops_cstr_impl
 
 
-#define _stack_ops_char(T)					\
-template <>							\
-struct StackOps<T> {						\
-	static inline void Push(lua_State *L, char value) {	\
-		char str[2] = {value, 0};			\
-		lua_pushstring(L, str);				\
-	}							\
-	static inline char Get(lua_State *L, int index) {	\
-		return luaL_checkstring(L, index)[0];		\
-	}							\
+#define _stack_ops_char(T)						\
+template <>								\
+struct StackOps<T> {							\
+	static inline void Push(lua_State *L, char value) {		\
+		char str[2] = {value, 0};				\
+		lua_pushstring(L, str);					\
+	}								\
+	static inline void Check(lua_State *L, int index, Error *err) {	\
+		checkstring(L, index, err);				\
+	}								\
+	static inline char Get(lua_State *L, int index) {		\
+		return luaL_checkstring(L, index)[0];			\
+	}								\
 };
 
 _stack_ops_char(char)
@@ -413,6 +523,7 @@ struct StackOps<T> {						\
 	static inline void Push(lua_State *L, bool value) {	\
 		lua_pushboolean(L, value ? 1 : 0);		\
 	}							\
+	static inline void Check(lua_State*, int, Error*) {}	\
 	static inline bool Get(lua_State *L, int index) {	\
 		return lua_toboolean(L, index) ? true : false;	\
 	}							\
@@ -423,43 +534,6 @@ _stack_ops_bool(bool&)
 _stack_ops_bool(const bool&)
 
 #undef _stack_ops_bool
-
-//============================================================================
-// Errors
-//============================================================================
-
-enum ErrorVerbosity {
-	Quiet,
-	Verbose,
-};
-
-class Error {
-protected:
-	ErrorVerbosity verbosity = Verbose;
-	int code = _INTERLUA_OK;
-	char *message = nullptr;
-
-public:
-	Error() = default;
-	explicit Error(ErrorVerbosity v): verbosity(v) {}
-	virtual ~Error();
-
-	void Clear();
-	int Code() const { return code; }
-	ErrorVerbosity Verbosity() const { return verbosity; }
-	const char *What() const { return message ? message : ""; }
-	explicit operator bool() const { return this->code != _INTERLUA_OK; }
-
-	virtual void Set(int code, const char *format, ...);
-};
-
-class AbortError : public Error {
-public:
-	void Set(int code, const char *format, ...) override;
-};
-
-extern AbortError DefaultError;
-
 
 // simply ignore errors when they are passed as an argument
 #define _stack_ops_ignore_push(T)			\
@@ -476,6 +550,59 @@ _stack_ops_ignore_push(AbortError*&)
 
 #undef _stack_ops_ignore_push
 
+template <typename T>
+static inline void check(lua_State *L, int index) {
+	ManualError merr;
+	merr.Init();
+
+	Error *err = merr.Get();
+	StackOps<T>::Check(L, index, err);
+	if (*err) {
+		lua_pushstring(L, err->What());
+		merr.Destroy();
+		lua_error(L);
+	} else {
+		merr.Destroy();
+	}
+
+}
+
+template <typename T>
+static inline T check_and_get(lua_State *L, int index) {
+	check<T>(L, index);
+	return StackOps<T>::Get(L, index);
+}
+
+//============================================================================
+// Recursive check helper
+//============================================================================
+
+template <int I>
+static inline void recursive_check_(lua_State*, Error*) {}
+
+template <int I, typename T, typename ...Args>
+static inline void recursive_check_(lua_State *L, Error *err) {
+	StackOps<T>::Check(L, I, err);
+	if (*err)
+		return;
+	recursive_check_<I+1, Args...>(L, err);
+}
+
+template <int I, typename ...Args>
+static inline void recursive_check(lua_State *L) {
+	ManualError merr;
+	merr.Init();
+
+	Error *err = merr.Get();
+	recursive_check_<I, Args...>(L, err);
+	if (*err) {
+		lua_pushstring(L, err->What());
+		merr.Destroy();
+		lua_error(L);
+	} else {
+		merr.Destroy();
+	}
+}
 
 //============================================================================
 // Function binding helpers
@@ -497,11 +624,13 @@ template <typename R, typename ...Args, int ...I>
 struct func_traits<R (Args...), index_tuple_type<I...>> {
 	static R call(lua_State *L, R (*fp)(Args...)) {
 		(void)L; // silence notused warning for cases with no arguments
+		recursive_check<1, Args...>(L);
 		return (*fp)(StackOps<Args>::Get(L, I+1)...);
 	}
 
 	static void construct(lua_State *L, void *mem) {
 		(void)L; // silence notused warning for cases with no arguments
+		recursive_check<2, Args...>(L);
 		new (mem) UserdataValue<R>(StackOps<Args>::Get(L, I+2)...);
 	}
 };
@@ -510,6 +639,7 @@ template <typename T, typename R, typename ...Args, int ...I>
 struct func_traits<R (T::*)(Args...), index_tuple_type<I...>> {
 	static R call(lua_State *L, T *cls, R (T::*fp)(Args...)) {
 		(void)L; // silence notused warning for cases with no arguments
+		recursive_check<2, Args...>(L);
 		return (cls->*fp)(StackOps<Args>::Get(L, I+2)...);
 	}
 };
@@ -518,6 +648,7 @@ template <typename T, typename R, typename ...Args, int ...I>
 struct func_traits<R (T::*)(Args...) const, index_tuple_type<I...>> {
 	static R call(lua_State *L, const T *cls, R (T::*fp)(Args...) const) {
 		(void)L; // silence notused warning for cases with no arguments
+		recursive_check<2, Args...>(L);
 		return (cls->*fp)(StackOps<Args>::Get(L, I+2)...);
 	}
 };
@@ -690,7 +821,7 @@ template <typename T>
 struct set_variable<T*> {
 	static int cfunction(lua_State *L, funcdata data) {
 		auto p = data.as<T*>();
-		*p = StackOps<T>::Get(L, 3);
+		*p = check_and_get<T>(L, 3);
 		return 0;
 	}
 };
@@ -699,7 +830,7 @@ template <typename T>
 struct set_variable<void (*)(T)> {
 	static int cfunction(lua_State *L, funcdata data) {
 		auto p = data.as<void (*)(T)>();
-		(*p)(StackOps<T>::Get(L, 3));
+		(*p)(check_and_get<T>(L, 3));
 		return 0;
 	}
 };
@@ -776,7 +907,7 @@ struct set_property<U T::*> {
 	static int cfunction(lua_State *L, funcdata data) {
 		T *cls = get_class_unchecked<T>(L, 1);
 		auto mp = data.as<U T::*>();
-		cls->*mp = StackOps<U>::Get(L, 3);
+		cls->*mp = check_and_get<U>(L, 3);
 		return 0;
 	}
 };
@@ -786,7 +917,7 @@ struct set_property<void (*)(T&, U)> {
 	static int cfunction(lua_State *L, funcdata data) {
 		T *cls = get_class_unchecked<T>(L, 1);
 		auto mp = data.as<void (*)(T&, U)>();
-		(*mp)(*cls, StackOps<U>::Get(L, 3));
+		(*mp)(*cls, check_and_get<U>(L, 3));
 		return 0;
 	}
 };
@@ -796,7 +927,7 @@ struct set_property<void (*)(T*, U)> {
 	static int cfunction(lua_State *L, funcdata data) {
 		T *cls = get_class_unchecked<T>(L, 1);
 		auto mp = data.as<void (*)(T*, U)>();
-		(*mp)(cls, StackOps<U>::Get(L, 3));
+		(*mp)(cls, check_and_get<U>(L, 3));
 		return 0;
 	}
 };
@@ -806,7 +937,7 @@ struct set_property<void (T::*)(U)> {
 	static int cfunction(lua_State *L, funcdata data) {
 		T *cls = get_class_unchecked<T>(L, 1);
 		auto mp = data.as<void (T::*)(U)>();
-		(cls->*mp)(StackOps<U>::Get(L, 3));
+		(cls->*mp)(check_and_get<U>(L, 3));
 		return 0;
 	}
 };
@@ -1314,11 +1445,12 @@ public:
 		return _interlua_rawlen(L, -1);
 	}
 
+	// TODO: allow error handling here
 	template <typename T>
 	inline T As() const {
 		stack_pop p(L, 1);
 		Push(L);
-		return StackOps<T>::Get(L, -1);
+		return check_and_get<T>(L, -1);
 	}
 
 	template <typename T>
@@ -1354,6 +1486,7 @@ struct StackOps<T> {						\
 	static inline void Push(lua_State *L, const Ref &v) {	\
 		v.Push(L);					\
 	}							\
+	static inline void Check(lua_State*, int, Error*) {}	\
 	static inline Ref Get(lua_State *L, int index) {	\
 		return FromStack(L, index);			\
 	}							\

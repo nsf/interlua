@@ -131,49 +131,6 @@ struct AnotherClass {
 	}
 };
 
-void test_get_userdata(int n, lua_State *L) {
-	using namespace InterLua;
-
-	DerivedClass d;
-	AnotherClass a = {5};
-
-	switch (n) {
-	case 1:
-		// expect "unregistered base class"
-		get_userdata(L, -1,
-			ClassKey<NotRegistered>::Class(),
-			ClassKey<NotRegistered>::Const(),
-			true);
-		break;
-	case 2:
-		// expect "mutable class required"
-		StackOps<const DerivedClass*>::Push(L, &d);
-		get_userdata(L, -1,
-			ClassKey<BaseClass>::Class(),
-			ClassKey<BaseClass>::Const(),
-			false);
-		break;
-	case 3:
-		// ok
-		StackOps<const DerivedClass*>::Push(L, &d);
-		get_userdata(L, -1,
-			ClassKey<BaseClass>::Class(),
-			ClassKey<BaseClass>::Const(),
-			true);
-		break;
-	case 4:
-		// expect "class mismatch"
-		StackOps<const AnotherClass&>::Push(L, a);
-		get_userdata(L, -1,
-			ClassKey<BaseClass>::Class(),
-			ClassKey<BaseClass>::Const(),
-			true);
-		break;
-	default:
-		break;
-	}
-}
-
 void test_BaseClass(BaseClass*) {
 }
 
@@ -208,25 +165,20 @@ STF_TEST("get_userdata") {
 			Variable("x", &AnotherClass::x).
 			StaticFunction("new", &AnotherClass::new_inst).
 		End().
-		Function("test_get_userdata", &test_get_userdata).
 		Function("test_BaseClass", &test_BaseClass).
 		Function("to_const", &to_const).
 		CFunction("new_userdata_garbage", &new_userdata_garbage).
 	End();
 	const char *init = R"*****(
+		function expect(err, msg)
+			return err:find(msg) ~= nil
+		end
 		function pcall_expect(expect, f, ...)
 			local ok, err = pcall(f, ...)
 			assert(not ok)
 			assert(err:find(expect) ~= nil,
 				"expected: [" .. expect .. "], got: [" .. err .. "]")
 		end
-		pcall_expect("unregistered base class",
-			test_get_userdata, 1)
-		pcall_expect("mutable class \".-\" required",
-			test_get_userdata, 2)
-		test_get_userdata(3)
-		pcall_expect("class mismatch",
-			test_get_userdata, 4)
 		pcall_expect("not userdata",
 			test_BaseClass, 5)
 		pcall_expect("not userdata",
@@ -240,6 +192,48 @@ STF_TEST("get_userdata") {
 			test_BaseClass, new_userdata_garbage())
 	)*****";
 	DO(init);
+	{
+		Error err;
+		auto expect = Global(L, "expect");
+
+		DerivedClass d;
+		AnotherClass a = {5};
+
+		get_userdata(L, -1,
+			ClassKey<NotRegistered>::Class(),
+			ClassKey<NotRegistered>::Const(),
+			true, &err);
+		STF_ASSERT(err && expect(err.What(), "unregistered base class"));
+		err.Reset();
+
+		StackOps<const DerivedClass*>::Push(L, &d);
+		get_userdata(L, -1,
+			ClassKey<BaseClass>::Class(),
+			ClassKey<BaseClass>::Const(),
+			false, &err);
+		STF_ASSERT(err && expect(err.What(), "mutable class \".-\" required"));
+		err.Reset();
+		lua_pop(L, 1);
+
+		StackOps<const DerivedClass*>::Push(L, &d);
+		get_userdata(L, -1,
+			ClassKey<BaseClass>::Class(),
+			ClassKey<BaseClass>::Const(),
+			true, &err);
+		STF_ASSERT(!err);
+		err.Reset();
+		lua_pop(L, 1);
+
+		StackOps<const AnotherClass&>::Push(L, a);
+		get_userdata(L, -1,
+			ClassKey<BaseClass>::Class(),
+			ClassKey<BaseClass>::Const(),
+			true, &err);
+		STF_ASSERT(err && expect(err.What(), "class mismatch"));
+		err.Reset();
+		lua_pop(L, 1);
+
+	}
 	END();
 }
 
@@ -336,7 +330,6 @@ STF_TEST("StackOps<T>") {
 			Function("get", &OOPTester::get).
 			StaticFunction("assert", &OOPTester::assert).
 		End().
-		Function("test_const_ref_stackops_get", &test_const_ref_stackops_get).
 	End();
 
 	// ------------ Push tests -------------
@@ -410,13 +403,10 @@ STF_TEST("StackOps<T>") {
 
 	// const value to non-const lvalue ref
 	StackOps<const OOPTester*>::Push(L, &t);
-	lua_setglobal(L, "a");
-	const char *testget = R"*****(
-		ok, err = pcall(test_const_ref_stackops_get, a)
-		assert(not ok)
-		assert(err:find("mutable class \".-\" required"))
-	)*****";
-	DO(testget);
+
+	Error err;
+	StackOps<OOPTester&>::Check(L, -1, &err);
+	STF_ASSERT(err);
 	DO("assert(Tester.assert{})");
 
 	// test Get for plain T, seems like RVO kicks in
@@ -442,7 +432,6 @@ STF_TEST("StackOps<T*>") {
 			Function("const_get", &OOPTester::const_get).
 			StaticFunction("assert", &OOPTester::assert).
 		End().
-		Function("test_const_ptr_stackops_get", &test_const_ptr_stackops_get).
 	End();
 
 	OOPTester t;
@@ -469,12 +458,9 @@ STF_TEST("StackOps<T*>") {
 	// T* and const T* StackOps::Get
 	StackOps<const OOPTester*>::Push(L, &t);
 	lua_setglobal(L, "a");
-	const char *testget = R"*****(
-		ok, err = pcall(test_const_ptr_stackops_get, a)
-		assert(not ok)
-		assert(err:find("mutable class \".-\" required"))
-	)*****";
-	DO(testget);
+	Error err;
+	StackOps<OOPTester&>::Check(L, -1, &err);
+	STF_ASSERT(err);
 
 	lua_getglobal(L, "a");
 	auto tp = StackOps<const OOPTester*>::Get(L, -1);
