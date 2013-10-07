@@ -241,8 +241,9 @@ void checknumber(lua_State *L, int narg, Error *err = &DefaultError);
 void checkstring(lua_State *L, int narg, Error *err = &DefaultError);
 
 // This function calls lua_error at the end, therefore it never returns. It
-// will destroy the ManualError object.
-void lerror(lua_State *L, ManualError *err);
+// will destroy the ManualError object by calling Destroy(). "lj" stands for
+// longjmp.
+void lj_error(lua_State *L, ManualError *err);
 
 //============================================================================
 // Userdata
@@ -299,9 +300,7 @@ static inline T *get_class(lua_State *L, int index, bool can_be_const) {
 		ClassKey<T>::Class(), ClassKey<T>::Const(),
 		can_be_const, err);
 	if (*err) {
-		lua_pushstring(L, err->What());
-		merr.Destroy();
-		lua_error(L);
+		lj_error(L, &merr);
 	} else {
 		merr.Destroy();
 	}
@@ -542,23 +541,20 @@ _stack_ops_ignore_push(AbortError*&)
 #undef _stack_ops_ignore_push
 
 template <typename T>
-static inline void check(lua_State *L, int index) {
+static inline void lj_check(lua_State *L, int index) {
 	ManualError merr;
 	Error *err = merr.Init();
 	StackOps<T>::Check(L, index, err);
 	if (*err) {
-		lua_pushstring(L, err->What());
-		merr.Destroy();
-		lua_error(L);
+		lj_error(L, &merr);
 	} else {
 		merr.Destroy();
 	}
-
 }
 
 template <typename T>
-static inline T check_and_get(lua_State *L, int index) {
-	check<T>(L, index);
+static inline T lj_check_and_get(lua_State *L, int index) {
+	lj_check<T>(L, index);
 	return StackOps<T>::Get(L, index);
 }
 
@@ -567,25 +563,23 @@ static inline T check_and_get(lua_State *L, int index) {
 //============================================================================
 
 template <int I>
-static inline void recursive_check_(lua_State*, Error*) {}
+static inline void recursive_check(lua_State*, Error*) {}
 
 template <int I, typename T, typename ...Args>
-static inline void recursive_check_(lua_State *L, Error *err) {
+static inline void recursive_check(lua_State *L, Error *err) {
 	StackOps<T>::Check(L, I, err);
 	if (*err)
 		return;
-	recursive_check_<I+1, Args...>(L, err);
+	recursive_check<I+1, Args...>(L, err);
 }
 
 template <int I, typename ...Args>
-static inline void recursive_check(lua_State *L) {
+static inline void lj_recursive_check(lua_State *L) {
 	ManualError merr;
 	Error *err = merr.Init();
-	recursive_check_<I, Args...>(L, err);
+	recursive_check<I, Args...>(L, err);
 	if (*err) {
-		lua_pushstring(L, err->What());
-		merr.Destroy();
-		lua_error(L);
+		lj_error(L, &merr);
 	} else {
 		merr.Destroy();
 	}
@@ -611,13 +605,13 @@ template <typename R, typename ...Args, int ...I>
 struct func_traits<R (Args...), index_tuple_type<I...>> {
 	static R call(lua_State *L, R (*fp)(Args...)) {
 		(void)L; // silence notused warning for cases with no arguments
-		recursive_check<1, Args...>(L);
+		lj_recursive_check<1, Args...>(L);
 		return (*fp)(StackOps<Args>::Get(L, I+1)...);
 	}
 
 	static void construct(lua_State *L, void *mem) {
 		(void)L; // silence notused warning for cases with no arguments
-		recursive_check<2, Args...>(L);
+		lj_recursive_check<2, Args...>(L);
 		new (mem) UserdataValue<R>(StackOps<Args>::Get(L, I+2)...);
 	}
 };
@@ -626,7 +620,7 @@ template <typename T, typename R, typename ...Args, int ...I>
 struct func_traits<R (T::*)(Args...), index_tuple_type<I...>> {
 	static R call(lua_State *L, T *cls, R (T::*fp)(Args...)) {
 		(void)L; // silence notused warning for cases with no arguments
-		recursive_check<2, Args...>(L);
+		lj_recursive_check<2, Args...>(L);
 		return (cls->*fp)(StackOps<Args>::Get(L, I+2)...);
 	}
 };
@@ -635,7 +629,7 @@ template <typename T, typename R, typename ...Args, int ...I>
 struct func_traits<R (T::*)(Args...) const, index_tuple_type<I...>> {
 	static R call(lua_State *L, const T *cls, R (T::*fp)(Args...) const) {
 		(void)L; // silence notused warning for cases with no arguments
-		recursive_check<2, Args...>(L);
+		lj_recursive_check<2, Args...>(L);
 		return (cls->*fp)(StackOps<Args>::Get(L, I+2)...);
 	}
 };
@@ -808,7 +802,7 @@ template <typename T>
 struct set_variable<T*> {
 	static int cfunction(lua_State *L, funcdata data) {
 		auto p = data.as<T*>();
-		*p = check_and_get<T>(L, 3);
+		*p = lj_check_and_get<T>(L, 3);
 		return 0;
 	}
 };
@@ -817,7 +811,7 @@ template <typename T>
 struct set_variable<void (*)(T)> {
 	static int cfunction(lua_State *L, funcdata data) {
 		auto p = data.as<void (*)(T)>();
-		(*p)(check_and_get<T>(L, 3));
+		(*p)(lj_check_and_get<T>(L, 3));
 		return 0;
 	}
 };
@@ -894,7 +888,7 @@ struct set_property<U T::*> {
 	static int cfunction(lua_State *L, funcdata data) {
 		T *cls = get_class_unchecked<T>(L, 1);
 		auto mp = data.as<U T::*>();
-		cls->*mp = check_and_get<U>(L, 3);
+		cls->*mp = lj_check_and_get<U>(L, 3);
 		return 0;
 	}
 };
@@ -904,7 +898,7 @@ struct set_property<void (*)(T&, U)> {
 	static int cfunction(lua_State *L, funcdata data) {
 		T *cls = get_class_unchecked<T>(L, 1);
 		auto mp = data.as<void (*)(T&, U)>();
-		(*mp)(*cls, check_and_get<U>(L, 3));
+		(*mp)(*cls, lj_check_and_get<U>(L, 3));
 		return 0;
 	}
 };
@@ -914,7 +908,7 @@ struct set_property<void (*)(T*, U)> {
 	static int cfunction(lua_State *L, funcdata data) {
 		T *cls = get_class_unchecked<T>(L, 1);
 		auto mp = data.as<void (*)(T*, U)>();
-		(*mp)(cls, check_and_get<U>(L, 3));
+		(*mp)(cls, lj_check_and_get<U>(L, 3));
 		return 0;
 	}
 };
@@ -924,7 +918,7 @@ struct set_property<void (T::*)(U)> {
 	static int cfunction(lua_State *L, funcdata data) {
 		T *cls = get_class_unchecked<T>(L, 1);
 		auto mp = data.as<void (T::*)(U)>();
-		(cls->*mp)(check_and_get<U>(L, 3));
+		(cls->*mp)(lj_check_and_get<U>(L, 3));
 		return 0;
 	}
 };
@@ -1432,12 +1426,12 @@ public:
 		return _interlua_rawlen(L, -1);
 	}
 
-	// TODO: allow error handling here
 	template <typename T>
 	inline T As() const {
 		stack_pop p(L, 1);
 		Push(L);
-		return check_and_get<T>(L, -1);
+		StackOps<T>::Check(L, -1, &DefaultError);
+		return StackOps<T>::Get(L, -1);
 	}
 
 	template <typename T>

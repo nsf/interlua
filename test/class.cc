@@ -59,12 +59,10 @@ STF_TEST("basic random use") {
 	END();
 }
 
-void const_to_nonconst_ref(InterLua::Ref v) {
-	v.As<Vec3&>();
+void const_to_nonconst_ref(Vec3&) {
 }
 
-void const_to_nonconst_ptr(InterLua::Ref v) {
-	v.As<Vec3*>();
+void const_to_nonconst_ptr(Vec3*) {
 }
 
 STF_TEST("const protection") {
