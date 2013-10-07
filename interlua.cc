@@ -1126,4 +1126,13 @@ void lj_error(lua_State *L, ManualError *err) {
 	lua_error(L);
 }
 
+void ManualError::LJCheckAndDestroy(lua_State *L) {
+	Error *err = Get();
+	if (*err) {
+		lj_error(L, this);
+	} else {
+		Destroy();
+	}
+}
+
 } // namespace InterLua

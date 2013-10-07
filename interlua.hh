@@ -225,6 +225,7 @@ struct ManualError {
 	uint8_t storage[sizeof(Error)];
 	Error *Init() {	return new (&storage) Error; }
 	Error *Get() { return reinterpret_cast<Error*>(storage); }
+	void LJCheckAndDestroy(lua_State *L);
 	void Destroy() { Get()->~Error(); }
 };
 
@@ -293,18 +294,13 @@ static inline T *get_class_unchecked(lua_State *L, int index) {
 }
 
 template <typename T>
-static inline T *get_class(lua_State *L, int index, bool can_be_const) {
+static inline T *lj_get_class(lua_State *L, int index, bool can_be_const) {
 	ManualError merr;
 	Error *err = merr.Init();
 	auto ud = get_userdata(L, index,
 		ClassKey<T>::Class(), ClassKey<T>::Const(),
 		can_be_const, err);
-	if (*err) {
-		lj_error(L, &merr);
-	} else {
-		merr.Destroy();
-	}
-
+	merr.LJCheckAndDestroy(L);
 	return reinterpret_cast<T*>(ud->Data());
 }
 
@@ -323,7 +319,6 @@ struct StackOps {
 		typename std::remove_reference<T>::type
 	>::type;
 	using NOREF_T = typename std::remove_reference<T>::type;
-
 	static inline void Push(lua_State *L, T &&value) {
 		void *mem = lua_newuserdata(L, sizeof(UserdataValue<PURE_T>));
 
@@ -342,14 +337,15 @@ struct StackOps {
 		lua_setmetatable(L, -2);
 		new (mem) UserdataValue<PURE_T>(std::forward<T>(value));
 	}
-
 	static inline void Check(lua_State *L, int index, Error *err) {
 		// the class cannot be const, when T isn't const
 		check_class<PURE_T>(L, index, std::is_const<NOREF_T>::value, err);
 	}
-
 	static inline T Get(lua_State *L, int index) {
 		return *get_class_unchecked<PURE_T>(L, index);
+	}
+	static inline T LJGet(lua_State *L, int index) {
+		return *lj_get_class<PURE_T>(L, index, std::is_const<NOREF_T>::value);
 	}
 };
 
@@ -377,6 +373,9 @@ struct StackOps<T*> {
 	static inline T *Get(lua_State *L, int index) {
 		return get_class_unchecked<PURE_T>(L, index);
 	}
+	static inline T *LJGet(lua_State *L, int index) {
+		return lj_get_class<PURE_T>(L, index, std::is_const<T>::value);
+	}
 };
 
 template <>
@@ -390,9 +389,8 @@ struct StackOps<std::nullptr_t> {
 template <>
 struct StackOps<lua_State*> {
 	static inline void Check(lua_State*, int, Error*) {}
-	static inline lua_State *Get(lua_State *L, int) {
-		return L;
-	}
+	static inline lua_State *Get(lua_State *L, int) { return L; }
+	static inline lua_State *LJGet(lua_State *L, int) { return L; }
 };
 
 #define _stack_ops_integer(TT, T)					\
@@ -405,6 +403,9 @@ struct StackOps<TT> {							\
 		checkinteger(L, index, err);				\
 	}								\
 	static inline T Get(lua_State *L, int index) {			\
+		return lua_tointeger(L, index);				\
+	}								\
+	static inline T LJGet(lua_State *L, int index) {		\
 		return luaL_checkinteger(L, index);			\
 	}								\
 };
@@ -450,6 +451,9 @@ struct StackOps<TT> {							\
 		checknumber(L, index, err);				\
 	}								\
 	static inline T Get(lua_State *L, int index) {			\
+		return lua_tonumber(L, index);				\
+	}								\
+	static inline T LJGet(lua_State *L, int index) {		\
 		return luaL_checknumber(L, index);			\
 	}								\
 };
@@ -476,6 +480,9 @@ static inline void Check(lua_State *L, int index, Error *err) {			\
 		checkstring(L, index, err);					\
 }										\
 static inline const char *Get(lua_State *L, int index) {			\
+	return lua_isnil(L, index) ? nullptr : lua_tostring(L, index);		\
+}										\
+static inline const char *LJGet(lua_State *L, int index) {			\
 	return lua_isnil(L, index) ? nullptr : luaL_checkstring(L, index);	\
 }
 
@@ -497,6 +504,9 @@ struct StackOps<T> {							\
 		checkstring(L, index, err);				\
 	}								\
 	static inline char Get(lua_State *L, int index) {		\
+		return lua_tostring(L, index)[0];			\
+	}								\
+	static inline char LJGet(lua_State *L, int index) {		\
 		return luaL_checkstring(L, index)[0];			\
 	}								\
 };
@@ -507,16 +517,19 @@ _stack_ops_char(const char&)
 
 #undef _stack_ops_char
 
-#define _stack_ops_bool(T)					\
-template <>							\
-struct StackOps<T> {						\
-	static inline void Push(lua_State *L, bool value) {	\
-		lua_pushboolean(L, value ? 1 : 0);		\
-	}							\
-	static inline void Check(lua_State*, int, Error*) {}	\
-	static inline bool Get(lua_State *L, int index) {	\
-		return lua_toboolean(L, index) ? true : false;	\
-	}							\
+#define _stack_ops_bool(T)						\
+template <>								\
+struct StackOps<T> {							\
+	static inline void Push(lua_State *L, bool value) {		\
+		lua_pushboolean(L, value ? 1 : 0);			\
+	}								\
+	static inline void Check(lua_State*, int, Error*) {}		\
+	static inline bool Get(lua_State *L, int index) {		\
+		return lua_toboolean(L, index) ? true : false;		\
+	}								\
+	static inline bool LJGet(lua_State *L, int index) {		\
+		return lua_toboolean(L, index) ? true : false;		\
+	}								\
 };
 
 _stack_ops_bool(bool)
@@ -545,11 +558,7 @@ static inline void lj_check(lua_State *L, int index) {
 	ManualError merr;
 	Error *err = merr.Init();
 	StackOps<T>::Check(L, index, err);
-	if (*err) {
-		lj_error(L, &merr);
-	} else {
-		merr.Destroy();
-	}
+	merr.LJCheckAndDestroy(L);
 }
 
 template <typename T>
@@ -578,11 +587,7 @@ static inline void lj_recursive_check(lua_State *L) {
 	ManualError merr;
 	Error *err = merr.Init();
 	recursive_check<I, Args...>(L, err);
-	if (*err) {
-		lj_error(L, &merr);
-	} else {
-		merr.Destroy();
-	}
+	merr.LJCheckAndDestroy(L);
 }
 
 //============================================================================
@@ -598,11 +603,29 @@ template<int N> struct make_index_impl {
 template<> struct make_index_impl<0> { using type = index_tuple_type<>; };
 template<int N> using index_tuple = typename make_index_impl<N>::type;
 
-template <typename F, typename IT>
+template <typename ...Args>
+struct is_all_pod : std::true_type {};
+
+template <typename T>
+struct is_all_pod<T> :
+	std::integral_constant<
+		bool,
+		std::is_pod<T>::value
+	> {};
+
+template <typename T, typename ...Args>
+struct is_all_pod<T, Args...> :
+	std::integral_constant<
+		bool,
+		std::is_pod<T>::value && is_all_pod<Args...>::value
+	> {};
+
+template <typename F, typename IT, bool POD>
 struct func_traits;
 
+// is_pod == false
 template <typename R, typename ...Args, int ...I>
-struct func_traits<R (Args...), index_tuple_type<I...>> {
+struct func_traits<R (Args...), index_tuple_type<I...>, false> {
 	static R call(lua_State *L, R (*fp)(Args...)) {
 		(void)L; // silence notused warning for cases with no arguments
 		lj_recursive_check<1, Args...>(L);
@@ -616,8 +639,23 @@ struct func_traits<R (Args...), index_tuple_type<I...>> {
 	}
 };
 
+// is_pod == true
+template <typename R, typename ...Args, int ...I>
+struct func_traits<R (Args...), index_tuple_type<I...>, true> {
+	static R call(lua_State *L, R (*fp)(Args...)) {
+		(void)L; // silence notused warning for cases with no arguments
+		return (*fp)(StackOps<Args>::LJGet(L, I+1)...);
+	}
+
+	static void construct(lua_State *L, void *mem) {
+		(void)L; // silence notused warning for cases with no arguments
+		new (mem) UserdataValue<R>(StackOps<Args>::LJGet(L, I+2)...);
+	}
+};
+
+// is_pod == false
 template <typename T, typename R, typename ...Args, int ...I>
-struct func_traits<R (T::*)(Args...), index_tuple_type<I...>> {
+struct func_traits<R (T::*)(Args...), index_tuple_type<I...>, false> {
 	static R call(lua_State *L, T *cls, R (T::*fp)(Args...)) {
 		(void)L; // silence notused warning for cases with no arguments
 		lj_recursive_check<2, Args...>(L);
@@ -625,12 +663,31 @@ struct func_traits<R (T::*)(Args...), index_tuple_type<I...>> {
 	}
 };
 
+// is_pod == true
 template <typename T, typename R, typename ...Args, int ...I>
-struct func_traits<R (T::*)(Args...) const, index_tuple_type<I...>> {
+struct func_traits<R (T::*)(Args...), index_tuple_type<I...>, true> {
+	static R call(lua_State *L, T *cls, R (T::*fp)(Args...)) {
+		(void)L; // silence notused warning for cases with no arguments
+		return (cls->*fp)(StackOps<Args>::LJGet(L, I+2)...);
+	}
+};
+
+// is_pod == false
+template <typename T, typename R, typename ...Args, int ...I>
+struct func_traits<R (T::*)(Args...) const, index_tuple_type<I...>, false> {
 	static R call(lua_State *L, const T *cls, R (T::*fp)(Args...) const) {
 		(void)L; // silence notused warning for cases with no arguments
 		lj_recursive_check<2, Args...>(L);
 		return (cls->*fp)(StackOps<Args>::Get(L, I+2)...);
+	}
+};
+
+// is_pod == true
+template <typename T, typename R, typename ...Args, int ...I>
+struct func_traits<R (T::*)(Args...) const, index_tuple_type<I...>, true> {
+	static R call(lua_State *L, const T *cls, R (T::*fp)(Args...) const) {
+		(void)L; // silence notused warning for cases with no arguments
+		return (cls->*fp)(StackOps<Args>::LJGet(L, I+2)...);
 	}
 };
 
@@ -651,8 +708,11 @@ struct call<R (*)(Args...)> {
 		typedef R (*FP)(Args...);
 		auto fp = *(FP*)lua_touserdata(L, lua_upvalueindex(1));
 		StackOps<R>::Push(L,
-			func_traits<R (Args...), index_tuple<sizeof...(Args)>>::
-				call(L, fp)
+			func_traits<
+				R (Args...),
+				index_tuple<sizeof...(Args)>,
+				is_all_pod<Args...>::value
+			>::call(L, fp)
 		);
 		return 1;
 	}
@@ -664,8 +724,11 @@ struct call<void (*)(Args...)> {
 	static int cfunction(lua_State *L) {
 		typedef void (*FP)(Args...);
 		auto fp = *(FP*)lua_touserdata(L, lua_upvalueindex(1));
-		func_traits<void (Args...), index_tuple<sizeof...(Args)>>::
-			call(L, fp);
+		func_traits<
+			void (Args...),
+			index_tuple<sizeof...(Args)>,
+			is_all_pod<Args...>::value
+		>::call(L, fp);
 		return 0;
 	}
 };
@@ -675,11 +738,14 @@ template <typename T, typename R, typename ...Args>
 struct call<R (T::*)(Args...)> {
 	static int cfunction(lua_State *L) {
 		typedef R (T::*FP)(Args...);
-		T *cls = get_class<T>(L, 1, false);
+		T *cls = lj_get_class<T>(L, 1, false);
 		auto fp = *(FP*)lua_touserdata(L, lua_upvalueindex(1));
 		StackOps<R>::Push(L,
-			func_traits<R (T::*)(Args...), index_tuple<sizeof...(Args)>>::
-				call(L, cls, fp)
+			func_traits<
+				R (T::*)(Args...),
+				index_tuple<sizeof...(Args)>,
+				is_all_pod<Args...>::value
+			>::call(L, cls, fp)
 		);
 		return 1;
 	}
@@ -690,10 +756,13 @@ template <typename T, typename ...Args>
 struct call<void (T::*)(Args...)> {
 	static int cfunction(lua_State *L) {
 		typedef void (T::*FP)(Args...);
-		T *cls = get_class<T>(L, 1, false);
+		T *cls = lj_get_class<T>(L, 1, false);
 		auto fp = *(FP*)lua_touserdata(L, lua_upvalueindex(1));
-		func_traits<void (T::*)(Args...), index_tuple<sizeof...(Args)>>::
-			call(L, cls, fp);
+		func_traits<
+			void (T::*)(Args...),
+			index_tuple<sizeof...(Args)>,
+			is_all_pod<Args...>::value
+		>::call(L, cls, fp);
 		return 0;
 	}
 };
@@ -703,11 +772,14 @@ template <typename T, typename R, typename ...Args>
 struct call<R (T::*)(Args...) const> {
 	static int cfunction(lua_State *L) {
 		typedef R (T::*FP)(Args...) const;
-		const T *cls = get_class<T>(L, 1, true);
+		const T *cls = lj_get_class<T>(L, 1, true);
 		auto fp = *(FP*)lua_touserdata(L, lua_upvalueindex(1));
 		StackOps<R>::Push(L,
-			func_traits<R (T::*)(Args...) const, index_tuple<sizeof...(Args)>>::
-				call(L, cls, fp)
+			func_traits<
+				R (T::*)(Args...) const,
+				index_tuple<sizeof...(Args)>,
+				is_all_pod<Args...>::value
+			>::call(L, cls, fp)
 		);
 		return 1;
 	}
@@ -718,10 +790,13 @@ template <typename T, typename ...Args>
 struct call<void (T::*)(Args...) const> {
 	static int cfunction(lua_State *L) {
 		typedef void (T::*FP)(Args...) const;
-		const T *cls = get_class<T>(L, 1, true);
+		const T *cls = lj_get_class<T>(L, 1, true);
 		auto fp = *(FP*)lua_touserdata(L, lua_upvalueindex(1));
-		func_traits<void (T::*)(Args...) const, index_tuple<sizeof...(Args)>>::
-			call(L, cls, fp);
+		func_traits<
+			void (T::*)(Args...) const,
+			index_tuple<sizeof...(Args)>,
+			is_all_pod<Args...>::value
+		>::call(L, cls, fp);
 		return 0;
 	}
 };
@@ -736,7 +811,11 @@ struct construct {
 		void *mem = lua_newuserdata(L, sizeof(UserdataValue<T>));
 		_interlua_rawgetp(L, LUA_REGISTRYINDEX, ClassKey<T>::Class());
 		lua_setmetatable(L, -2);
-		func_traits<T (Args...), index_tuple<sizeof...(Args)>>::construct(L, mem);
+		func_traits<
+			T (Args...),
+			index_tuple<sizeof...(Args)>,
+			is_all_pod<Args...>::value
+		>::construct(L, mem);
 		return 1;
 	}
 };
@@ -752,7 +831,7 @@ template <typename T>
 struct member_cfunction<int (T::*)(lua_State*)> {
 	static int cfunction(lua_State *L) {
 		typedef int (T::*FP)(lua_State*);
-		T *cls = get_class<T>(L, 1, false);
+		T *cls = lj_get_class<T>(L, 1, false);
 		auto fp = *(FP*)lua_touserdata(L, lua_upvalueindex(1));
 		return (cls->*fp)(L);
 	}
@@ -762,7 +841,7 @@ template <typename T>
 struct member_cfunction<int (T::*)(lua_State*) const> {
 	static int cfunction(lua_State *L) {
 		typedef int (T::*FP)(lua_State*) const;
-		const T *cls = get_class<T>(L, 1, true);
+		const T *cls = lj_get_class<T>(L, 1, true);
 		auto fp = *(FP*)lua_touserdata(L, lua_upvalueindex(1));
 		return (cls->*fp)(L);
 	}
@@ -1461,16 +1540,16 @@ static inline Ref Global(lua_State *L, const char *name) {
 	return {L, luaL_ref(L, LUA_REGISTRYINDEX)};
 }
 
-#define _stack_ops_ref(T)					\
-template <>							\
-struct StackOps<T> {						\
-	static inline void Push(lua_State *L, const Ref &v) {	\
-		v.Push(L);					\
-	}							\
-	static inline void Check(lua_State*, int, Error*) {}	\
-	static inline Ref Get(lua_State *L, int index) {	\
-		return FromStack(L, index);			\
-	}							\
+#define _stack_ops_ref(T)						\
+template <>								\
+struct StackOps<T> {							\
+	static inline void Push(lua_State *L, const Ref &v) {		\
+		v.Push(L);						\
+	}								\
+	static inline void Check(lua_State*, int, Error*) {}		\
+	static inline Ref Get(lua_State *L, int index) {		\
+		return FromStack(L, index);				\
+	}								\
 };
 
 _stack_ops_ref(Ref)
