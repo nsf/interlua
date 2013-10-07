@@ -223,16 +223,9 @@ extern AbortError DefaultError;
 // longjmp context, hence we need to construct and deconstruct it manually)
 struct ManualError {
 	uint8_t storage[sizeof(Error)];
-
-	void Init() {
-		new (&storage) Error;
-	}
-
-	void Destroy() {
-		Get()->~Error();
-	}
-
+	Error *Init() {	return new (&storage) Error; }
 	Error *Get() { return reinterpret_cast<Error*>(storage); }
+	void Destroy() { Get()->~Error(); }
 };
 
 //============================================================================
@@ -301,9 +294,7 @@ static inline T *get_class_unchecked(lua_State *L, int index) {
 template <typename T>
 static inline T *get_class(lua_State *L, int index, bool can_be_const) {
 	ManualError merr;
-	merr.Init();
-
-	Error *err = merr.Get();
+	Error *err = merr.Init();
 	auto ud = get_userdata(L, index,
 		ClassKey<T>::Class(), ClassKey<T>::Const(),
 		can_be_const, err);
@@ -553,9 +544,7 @@ _stack_ops_ignore_push(AbortError*&)
 template <typename T>
 static inline void check(lua_State *L, int index) {
 	ManualError merr;
-	merr.Init();
-
-	Error *err = merr.Get();
+	Error *err = merr.Init();
 	StackOps<T>::Check(L, index, err);
 	if (*err) {
 		lua_pushstring(L, err->What());
@@ -591,9 +580,7 @@ static inline void recursive_check_(lua_State *L, Error *err) {
 template <int I, typename ...Args>
 static inline void recursive_check(lua_State *L) {
 	ManualError merr;
-	merr.Init();
-
-	Error *err = merr.Get();
+	Error *err = merr.Init();
 	recursive_check_<I, Args...>(L, err);
 	if (*err) {
 		lua_pushstring(L, err->What());
