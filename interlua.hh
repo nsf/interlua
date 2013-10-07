@@ -109,6 +109,9 @@ struct funcdata {
 	}
 };
 
+static_assert(std::is_pod<funcdata>::value,
+	"funcdata should be POD on all known compilers");
+
 // pushes t[key] onto the stack, where t is the table at the given index
 static inline void rawgetfield(lua_State *L, int index, const char *key) {
 	index = _interlua_absindex(L, index);
