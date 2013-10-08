@@ -10,6 +10,7 @@ STF_SUITE_NAME("tech")
 
 // static inline void rawgetfield(lua_State *L, int index, const char *key)
 STF_TEST("rawgetfield") {
+	using namespace InterLua;
 	LUA();
 	const char *init = R"*****(
 		table1 = {a = 1, b = 2, c = 3}
@@ -18,24 +19,25 @@ STF_TEST("rawgetfield") {
 	DO(init);
 	lua_getglobal(L, "table1");
 	lua_getglobal(L, "table2");
-	InterLua::rawgetfield(L, -2, "b");
-	InterLua::rawgetfield(L, -2, "e");
+	rawgetfield(L, -2, "b");
+	rawgetfield(L, -2, "e");
 	STF_ASSERT(_interlua_compare(L, -1, -2, _INTERLUA_OPEQ));
 	END();
 }
 
 // static inline void rawsetfield(lua_State *L, int index, const char *key)
 STF_TEST("rawsetfield") {
+	using namespace InterLua;
 	LUA();
 	lua_newtable(L);
 	lua_newtable(L);
 	lua_pushinteger(L, 42);
-	InterLua::rawsetfield(L, -2, "test");
+	rawsetfield(L, -2, "test");
 	lua_pushinteger(L, 42);
-	InterLua::rawsetfield(L, -3, "test");
+	rawsetfield(L, -3, "test");
 
-	InterLua::rawgetfield(L, -2, "test");
-	InterLua::rawgetfield(L, -2, "test");
+	rawgetfield(L, -2, "test");
+	rawgetfield(L, -2, "test");
 	STF_ASSERT(_interlua_compare(L, -1, -2, _INTERLUA_OPEQ));
 	END();
 }
@@ -55,6 +57,7 @@ STF_TEST("stack_pop") {
 	END();
 }
 
+// TODO: rewrite to register_class_tables, when it's done
 // void create_class_tables(lua_State *L, const char *name)
 /*
 STF_TEST("create_class_tables") {
@@ -131,7 +134,7 @@ struct AnotherClass {
 	}
 };
 
-void test_BaseClass(BaseClass*) {
+void as_BaseClass(BaseClass*) {
 }
 
 InterLua::Ref to_const(InterLua::Ref r, lua_State *L) {
@@ -165,7 +168,7 @@ STF_TEST("get_userdata") {
 			Variable("x", &AnotherClass::x).
 			StaticFunction("new", &AnotherClass::new_inst).
 		End().
-		Function("test_BaseClass", &test_BaseClass).
+		Function("as_BaseClass", &as_BaseClass).
 		Function("to_const", &to_const).
 		CFunction("new_userdata_garbage", &new_userdata_garbage).
 	End();
@@ -180,16 +183,16 @@ STF_TEST("get_userdata") {
 				"expected: [" .. expect .. "], got: [" .. err .. "]")
 		end
 		pcall_expect("not userdata",
-			test_BaseClass, 5)
+			as_BaseClass, 5)
 		pcall_expect("not userdata",
-			test_BaseClass, "123")
+			as_BaseClass, "123")
 		pcall_expect("class mismatch",
-			test_BaseClass, Another.new())
-		test_BaseClass(Derived.new())
+			as_BaseClass, Another.new())
+		as_BaseClass(Derived.new())
 		pcall_expect("mutable class \".-\" required",
-			test_BaseClass, to_const(Derived.new()))
+			as_BaseClass, to_const(Derived.new()))
 		pcall_expect("foreign userdata",
-			test_BaseClass, new_userdata_garbage())
+			as_BaseClass, new_userdata_garbage())
 	)*****";
 	DO(init);
 	{
@@ -315,10 +318,6 @@ int OOPTester::dtor = 0;
 int OOPTester::copy_op = 0;
 int OOPTester::move_op = 0;
 
-void test_const_ref_stackops_get(lua_State *L) {
-	OOPTester x = InterLua::StackOps<OOPTester&>::Get(L, 1);
-}
-
 // template <typename T> StackOps
 STF_TEST("StackOps<T>") {
 	OOPTester::reset();
@@ -382,15 +381,18 @@ STF_TEST("StackOps<T>") {
 	// rvalue ref doesn't work (expected?)
 	// lvalue ref
 	StackOps<OOPTester>::Push(L, {});
+	StackOps<OOPTester&>::Check(L, -1);
 	OOPTester b = StackOps<OOPTester&>::Get(L, -1);
 	DO("assert(Tester.assert{dc=1, cc=1, mc=1, dt=1})");
 	OOPTester::reset();
 
 	// lvalue ref, check that it doesn't do anything (silly check?)
+	StackOps<OOPTester&>::Check(L, -1);
 	StackOps<OOPTester&>::Get(L, -1);
 	DO("assert(Tester.assert{})");
 
 	// const lvalue ref
+	StackOps<const OOPTester&>::Check(L, -1);
 	OOPTester c = StackOps<const OOPTester&>::Get(L, -1);
 	DO("assert(Tester.assert{cc=1})");
 	OOPTester::reset();
@@ -411,13 +413,10 @@ STF_TEST("StackOps<T>") {
 
 	// test Get for plain T, seems like RVO kicks in
 	StackOps<OOPTester>::Push(L, {});
+	StackOps<OOPTester>::Check(L, -1);
 	auto d = StackOps<OOPTester>::Get(L, -1);
 	DO("assert(Tester.assert{dc=1, dt=1, mc=1, cc=1})");
 	END();
-}
-
-void test_const_ptr_stackops_get(lua_State *L) {
-	InterLua::StackOps<OOPTester*>::Get(L, 1);
 }
 
 // template <typename T> StackOps<T*>
@@ -463,11 +462,13 @@ STF_TEST("StackOps<T*>") {
 	STF_ASSERT(err);
 
 	lua_getglobal(L, "a");
+	StackOps<const OOPTester*>::Check(L, -1);
 	auto tp = StackOps<const OOPTester*>::Get(L, -1);
 	lua_pop(L, 1);
 	STF_ASSERT(&t == tp);
 
 	StackOps<OOPTester*>::Push(L, &t);
+	StackOps<OOPTester*>::Check(L, -1);
 	tp = StackOps<OOPTester*>::Get(L, -1);
 	lua_pop(L, 1);
 	STF_ASSERT(&t == tp);
@@ -483,6 +484,7 @@ STF_TEST("StackOps<T*>") {
 STF_TEST("StackOps<lua_State*>") {
 	using namespace InterLua;
 	LUA();
+	StackOps<lua_State*>::Check(L, 100500);
 	auto l = StackOps<lua_State*>::Get(L, 100500);
 	STF_ASSERT(l == L);
 	STF_ASSERT(lua_gettop(L) == 0);
@@ -499,10 +501,13 @@ do {							\
 	lua_setglobal(L, "a");				\
 	DO("assert(a == b and a == c)");		\
 	lua_getglobal(L, "a");				\
+	StackOps<T>::Check(L, -1);			\
 	T a = StackOps<T>::Get(L, -1);			\
 	lua_getglobal(L, "b");				\
+	StackOps<T&>::Check(L, -1);			\
 	T b = StackOps<T&>::Get(L, -1);			\
 	lua_getglobal(L, "c");				\
+	StackOps<const T&>::Check(L, -1);		\
 	T c = StackOps<const T&>::Get(L, -1);		\
 	lua_pop(L, 3);					\
 	STF_ASSERT(a == b && a == c && a == arg);	\
@@ -549,8 +554,10 @@ STF_TEST("_stack_ops_cstr_impl") {
 	lua_setglobal(L, "b");
 	DO("assert(a == nil and b == 'hello, world')");
 	lua_getglobal(L, "a");
+	StackOps<const char*>::Check(L, -1);
 	const char *a = StackOps<const char*>::Get(L, -1);
 	lua_getglobal(L, "b");
+	StackOps<const char*>::Check(L, -1);
 	const char *b = StackOps<const char*>::Get(L, -1);
 	lua_pop(L, 2);
 	STF_ASSERT(a == nullptr && strcmp(b, "hello, world") == 0);

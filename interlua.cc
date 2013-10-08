@@ -1100,6 +1100,11 @@ void argerror(lua_State *L, int narg, const char *extra, Error *err) {
 		loc.get(), narg, ar.name, extra);
 }
 
+void checkany(lua_State *L, int narg, Error *err) {
+	if (lua_type(L, narg) == LUA_TNONE)
+		argerror(L, narg, "value expected", err);
+}
+
 void checkinteger(lua_State *L, int narg, Error *err) {
 	int isnum;
 	lua_tointegerx(L, narg, &isnum);

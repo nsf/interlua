@@ -109,6 +109,8 @@ struct funcdata {
 	}
 };
 
+// We need it to be POD, because it'll be used in a context where longjmp may
+// happen (lua_error).
 static_assert(std::is_pod<funcdata>::value,
 	"funcdata should be POD on all known compilers");
 
@@ -240,6 +242,7 @@ struct ManualError {
 // 1. They only check for an error without returning anything.
 // 2. And instead of raising a lua error, they call err->Set(...).
 void argerror(lua_State *L, int narg, const char *extra, Error *err);
+void checkany(lua_State *L, int narg, Error *err);
 void checkinteger(lua_State *L, int narg, Error *err);
 void checknumber(lua_State *L, int narg, Error *err);
 void checkstring(lua_State *L, int narg, Error *err);
@@ -333,7 +336,7 @@ struct StackOps {
 		lua_setmetatable(L, -2);
 		new (mem) UserdataValue<PURE_T>(std::forward<T>(value));
 	}
-	static inline void Check(lua_State *L, int index, Error *err) {
+	static inline void Check(lua_State *L, int index, Error *err = &DefaultError) {
 		// the class cannot be const, when T isn't const
 		check_class<PURE_T>(L, index, std::is_const<NOREF_T>::value, err);
 	}
@@ -362,7 +365,7 @@ struct StackOps<T*> {
 		lua_setmetatable(L, -2);
 		new (mem) UserdataPointer<T>(value);
 	}
-	static inline void Check(lua_State *L, int index, Error *err) {
+	static inline void Check(lua_State *L, int index, Error *err = &DefaultError) {
 		// the class cannot be const, when T isn't const
 		check_class<PURE_T>(L, index, std::is_const<T>::value, err);
 	}
@@ -384,26 +387,26 @@ struct StackOps<std::nullptr_t> {
 
 template <>
 struct StackOps<lua_State*> {
-	static inline void Check(lua_State*, int, Error*) {}
+	static inline void Check(lua_State*, int, Error* = &DefaultError) {}
 	static inline lua_State *Get(lua_State *L, int) { return L; }
 	static inline lua_State *LJGet(lua_State *L, int) { return L; }
 };
 
-#define _stack_ops_integer(TT, T)					\
-template <>								\
-struct StackOps<TT> {							\
-	static inline void Push(lua_State *L, T value) {		\
-		lua_pushinteger(L, value);				\
-	}								\
-	static inline void Check(lua_State *L, int index, Error *err) {	\
-		checkinteger(L, index, err);				\
-	}								\
-	static inline T Get(lua_State *L, int index) {			\
-		return lua_tointeger(L, index);				\
-	}								\
-	static inline T LJGet(lua_State *L, int index) {		\
-		return luaL_checkinteger(L, index);			\
-	}								\
+#define _stack_ops_integer(TT, T)							\
+template <>										\
+struct StackOps<TT> {									\
+	static inline void Push(lua_State *L, T value) {				\
+		lua_pushinteger(L, value);						\
+	}										\
+	static inline void Check(lua_State *L, int index, Error *err = &DefaultError) {	\
+		checkinteger(L, index, err);						\
+	}										\
+	static inline T Get(lua_State *L, int index) {					\
+		return lua_tointeger(L, index);						\
+	}										\
+	static inline T LJGet(lua_State *L, int index) {				\
+		return luaL_checkinteger(L, index);					\
+	}										\
 };
 
 _stack_ops_integer(signed char, signed char)
@@ -437,21 +440,21 @@ _stack_ops_integer(const unsigned long&, unsigned long)
 #undef _stack_ops_integer
 
 
-#define _stack_ops_float(TT, T)						\
-template <>								\
-struct StackOps<TT> {							\
-	static inline void Push(lua_State *L, T value) {		\
-		lua_pushnumber(L, value);				\
-	}								\
-	static inline void Check(lua_State *L, int index, Error *err) {	\
-		checknumber(L, index, err);				\
-	}								\
-	static inline T Get(lua_State *L, int index) {			\
-		return lua_tonumber(L, index);				\
-	}								\
-	static inline T LJGet(lua_State *L, int index) {		\
-		return luaL_checknumber(L, index);			\
-	}								\
+#define _stack_ops_float(TT, T)								\
+template <>										\
+struct StackOps<TT> {									\
+	static inline void Push(lua_State *L, T value) {				\
+		lua_pushnumber(L, value);						\
+	}										\
+	static inline void Check(lua_State *L, int index, Error *err = &DefaultError) {	\
+		checknumber(L, index, err);						\
+	}										\
+	static inline T Get(lua_State *L, int index) {					\
+		return lua_tonumber(L, index);						\
+	}										\
+	static inline T LJGet(lua_State *L, int index) {				\
+		return luaL_checknumber(L, index);					\
+	}										\
 };
 
 _stack_ops_float(float, float)
@@ -471,7 +474,7 @@ static inline void Push(lua_State *L, const char *str) {			\
 	else									\
 		lua_pushnil(L);							\
 }										\
-static inline void Check(lua_State *L, int index, Error *err) {			\
+static inline void Check(lua_State *L, int index, Error *err = &DefaultError) {	\
 	if (!lua_isnil(L, index))						\
 		checkstring(L, index, err);					\
 }										\
@@ -489,22 +492,22 @@ template <int N> struct StackOps<const char (&)[N]> { _stack_ops_cstr_impl };
 #undef _stack_ops_cstr_impl
 
 
-#define _stack_ops_char(T)						\
-template <>								\
-struct StackOps<T> {							\
-	static inline void Push(lua_State *L, char value) {		\
-		char str[2] = {value, 0};				\
-		lua_pushstring(L, str);					\
-	}								\
-	static inline void Check(lua_State *L, int index, Error *err) {	\
-		checkstring(L, index, err);				\
-	}								\
-	static inline char Get(lua_State *L, int index) {		\
-		return lua_tostring(L, index)[0];			\
-	}								\
-	static inline char LJGet(lua_State *L, int index) {		\
-		return luaL_checkstring(L, index)[0];			\
-	}								\
+#define _stack_ops_char(T)								\
+template <>										\
+struct StackOps<T> {									\
+	static inline void Push(lua_State *L, char value) {				\
+		char str[2] = {value, 0};						\
+		lua_pushstring(L, str);							\
+	}										\
+	static inline void Check(lua_State *L, int index, Error *err = &DefaultError) {	\
+		checkstring(L, index, err);						\
+	}										\
+	static inline char Get(lua_State *L, int index) {				\
+		return lua_tostring(L, index)[0];					\
+	}										\
+	static inline char LJGet(lua_State *L, int index) {				\
+		return luaL_checkstring(L, index)[0];					\
+	}										\
 };
 
 _stack_ops_char(char)
@@ -513,19 +516,22 @@ _stack_ops_char(const char&)
 
 #undef _stack_ops_char
 
-#define _stack_ops_bool(T)						\
-template <>								\
-struct StackOps<T> {							\
-	static inline void Push(lua_State *L, bool value) {		\
-		lua_pushboolean(L, value ? 1 : 0);			\
-	}								\
-	static inline void Check(lua_State*, int, Error*) {}		\
-	static inline bool Get(lua_State *L, int index) {		\
-		return lua_toboolean(L, index) ? true : false;		\
-	}								\
-	static inline bool LJGet(lua_State *L, int index) {		\
-		return lua_toboolean(L, index) ? true : false;		\
-	}								\
+#define _stack_ops_bool(T)								\
+template <>										\
+struct StackOps<T> {									\
+	static inline void Push(lua_State *L, bool value) {				\
+		lua_pushboolean(L, value ? 1 : 0);					\
+	}										\
+	static inline void Check(lua_State *L, int narg, Error *err = &DefaultError) {	\
+		checkany(L, narg, err);							\
+	}										\
+	static inline bool Get(lua_State *L, int index) {				\
+		return lua_toboolean(L, index) ? true : false;				\
+	}										\
+	static inline bool LJGet(lua_State *L, int index) {				\
+		luaL_checkany(L, index);						\
+		return lua_toboolean(L, index) ? true : false;				\
+	}										\
 };
 
 _stack_ops_bool(bool)
@@ -1522,16 +1528,18 @@ static inline Ref Global(lua_State *L, const char *name) {
 	return {L, luaL_ref(L, LUA_REGISTRYINDEX)};
 }
 
-#define _stack_ops_ref(T)						\
-template <>								\
-struct StackOps<T> {							\
-	static inline void Push(lua_State *L, const Ref &v) {		\
-		v.Push(L);						\
-	}								\
-	static inline void Check(lua_State*, int, Error*) {}		\
-	static inline Ref Get(lua_State *L, int index) {		\
-		return FromStack(L, index);				\
-	}								\
+#define _stack_ops_ref(T)								\
+template <>										\
+struct StackOps<T> {									\
+	static inline void Push(lua_State *L, const Ref &v) {				\
+		v.Push(L);								\
+	}										\
+	static inline void Check(lua_State *L, int narg, Error *err = &DefaultError) {	\
+		checkany(L, narg, err);							\
+	}										\
+	static inline Ref Get(lua_State *L, int index) {				\
+		return FromStack(L, index);						\
+	}										\
 };
 
 _stack_ops_ref(Ref)
