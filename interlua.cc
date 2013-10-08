@@ -921,7 +921,7 @@ Userdata::~Userdata() {}
 
 // expects 'absidx' metatable on top of the stack
 static void get_userdata_error(lua_State *L, int absidx, int idx,
-	void *base_class_key, const char *str, Error *err = &DefaultError)
+	void *base_class_key, const char *str, Error *err)
 {
 	int popn = 1; // metatable
 	const char *got = nullptr;

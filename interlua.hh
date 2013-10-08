@@ -239,10 +239,10 @@ struct ManualError {
 // function similar to many luaL_ functions, with two differences:
 // 1. They only check for an error without returning anything.
 // 2. And instead of raising a lua error, they call err->Set(...).
-void argerror(lua_State *L, int narg, const char *extra, Error *err = &DefaultError);
-void checkinteger(lua_State *L, int narg, Error *err = &DefaultError);
-void checknumber(lua_State *L, int narg, Error *err = &DefaultError);
-void checkstring(lua_State *L, int narg, Error *err = &DefaultError);
+void argerror(lua_State *L, int narg, const char *extra, Error *err);
+void checkinteger(lua_State *L, int narg, Error *err);
+void checknumber(lua_State *L, int narg, Error *err);
+void checkstring(lua_State *L, int narg, Error *err);
 
 //============================================================================
 // Userdata
@@ -275,11 +275,11 @@ public:
 
 Userdata *get_userdata(lua_State *L, int index,
 	void *base_key, void *base_const_key, bool can_be_const,
-	Error *err = &DefaultError);
+	Error *err);
 
 template <typename T>
 static void check_class(lua_State *L, int index,
-	bool can_be_const, Error *err = &DefaultError)
+	bool can_be_const, Error *err)
 {
 	get_userdata(L, index,
 		ClassKey<T>::Class(), ClassKey<T>::Const(),
