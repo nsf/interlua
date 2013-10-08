@@ -1120,16 +1120,12 @@ void checkstring(lua_State *L, int narg, Error *err) {
 		tag_error(L, narg, LUA_TSTRING, err);
 }
 
-void lj_error(lua_State *L, ManualError *err) {
-	lua_pushstring(L, err->Get()->What());
-	err->Destroy();
-	lua_error(L);
-}
-
 void ManualError::LJCheckAndDestroy(lua_State *L) {
 	Error *err = Get();
 	if (*err) {
-		lj_error(L, this);
+		lua_pushstring(L, err->What());
+		Destroy();
+		lua_error(L);
 	} else {
 		Destroy();
 	}

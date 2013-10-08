@@ -244,11 +244,6 @@ void checkinteger(lua_State *L, int narg, Error *err = &DefaultError);
 void checknumber(lua_State *L, int narg, Error *err = &DefaultError);
 void checkstring(lua_State *L, int narg, Error *err = &DefaultError);
 
-// This function calls lua_error at the end, therefore it never returns. It
-// will destroy the ManualError object by calling Destroy(). "lj" stands for
-// longjmp.
-void lj_error(lua_State *L, ManualError *err);
-
 //============================================================================
 // Userdata
 //============================================================================
