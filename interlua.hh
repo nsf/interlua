@@ -318,7 +318,7 @@ struct StackOps {
 	// templates used here.
 	using PURE_T = typename std::decay<T>::type;
 	using NOREF_T = typename std::remove_reference<T>::type;
-	static inline void Push(lua_State *L, T &&value) {
+	static inline int Push(lua_State *L, T &&value) {
 		void *mem = lua_newuserdata(L, sizeof(UserdataValue<PURE_T>));
 
 		// We pass Class() key here, because passing an argument via
@@ -335,6 +335,7 @@ struct StackOps {
 		}
 		lua_setmetatable(L, -2);
 		new (mem) UserdataValue<PURE_T>(std::forward<T>(value));
+		return 1;
 	}
 	static inline void Check(lua_State *L, int index, Error *err = &DefaultError) {
 		// the class cannot be const, when T isn't const
@@ -353,7 +354,7 @@ struct StackOps {
 template <typename T>
 struct StackOps<T*> {
 	using PURE_T = typename std::decay<T>::type;
-	static inline void Push(lua_State *L, T *value) {
+	static inline int Push(lua_State *L, T *value) {
 		void *mem = lua_newuserdata(L, sizeof(UserdataPointer<T>));
 		void *mt = std::is_const<T>::value ?
 			ClassKey<PURE_T>::Const() :
@@ -364,6 +365,7 @@ struct StackOps<T*> {
 		}
 		lua_setmetatable(L, -2);
 		new (mem) UserdataPointer<T>(value);
+		return 1;
 	}
 	static inline void Check(lua_State *L, int index, Error *err = &DefaultError) {
 		// the class cannot be const, when T isn't const
@@ -379,8 +381,9 @@ struct StackOps<T*> {
 
 template <>
 struct StackOps<std::nullptr_t> {
-	static inline void Push(lua_State *L, std::nullptr_t) {
+	static inline int Push(lua_State *L, std::nullptr_t) {
 		lua_pushnil(L);
+		return 1;
 	}
 	// TODO: do we need Get here?
 };
@@ -395,8 +398,9 @@ struct StackOps<lua_State*> {
 #define _stack_ops_integer(TT, T)							\
 template <>										\
 struct StackOps<TT> {									\
-	static inline void Push(lua_State *L, T value) {				\
+	static inline int Push(lua_State *L, T value) {					\
 		lua_pushinteger(L, value);						\
+		return 1;								\
 	}										\
 	static inline void Check(lua_State *L, int index, Error *err = &DefaultError) {	\
 		checkinteger(L, index, err);						\
@@ -443,8 +447,9 @@ _stack_ops_integer(const unsigned long&, unsigned long)
 #define _stack_ops_float(TT, T)								\
 template <>										\
 struct StackOps<TT> {									\
-	static inline void Push(lua_State *L, T value) {				\
+	static inline int Push(lua_State *L, T value) {					\
 		lua_pushnumber(L, value);						\
+		return 1;								\
 	}										\
 	static inline void Check(lua_State *L, int index, Error *err = &DefaultError) {	\
 		checknumber(L, index, err);						\
@@ -468,11 +473,12 @@ _stack_ops_float(const double&, double)
 
 
 #define _stack_ops_cstr_impl							\
-static inline void Push(lua_State *L, const char *str) {			\
+static inline int Push(lua_State *L, const char *str) {				\
 	if (str)								\
 		lua_pushstring(L, str);						\
 	else									\
 		lua_pushnil(L);							\
+	return 1;								\
 }										\
 static inline void Check(lua_State *L, int index, Error *err = &DefaultError) {	\
 	if (!lua_isnil(L, index))						\
@@ -495,9 +501,10 @@ template <int N> struct StackOps<const char (&)[N]> { _stack_ops_cstr_impl };
 #define _stack_ops_char(T)								\
 template <>										\
 struct StackOps<T> {									\
-	static inline void Push(lua_State *L, char value) {				\
+	static inline int Push(lua_State *L, char value) {				\
 		char str[2] = {value, 0};						\
 		lua_pushstring(L, str);							\
+		return 1;								\
 	}										\
 	static inline void Check(lua_State *L, int index, Error *err = &DefaultError) {	\
 		checkstring(L, index, err);						\
@@ -519,8 +526,9 @@ _stack_ops_char(const char&)
 #define _stack_ops_bool(T)								\
 template <>										\
 struct StackOps<T> {									\
-	static inline void Push(lua_State *L, bool value) {				\
+	static inline int Push(lua_State *L, bool value) {				\
 		lua_pushboolean(L, value ? 1 : 0);					\
+		return 1;								\
 	}										\
 	static inline void Check(lua_State *L, int narg, Error *err = &DefaultError) {	\
 		checkany(L, narg, err);							\
@@ -544,7 +552,8 @@ _stack_ops_bool(const bool&)
 #define _stack_ops_ignore_push(T)			\
 template <>						\
 struct StackOps<T> {					\
-	static inline void Push(lua_State*, T) {	\
+	static inline int Push(lua_State*, T) {		\
+		return 0;				\
 	}						\
 };
 
@@ -695,14 +704,13 @@ struct call<R (*)(Args...)> {
 	static int cfunction(lua_State *L) {
 		typedef R (*FP)(Args...);
 		auto fp = *(FP*)lua_touserdata(L, lua_upvalueindex(1));
-		StackOps<R>::Push(L,
+		return StackOps<R>::Push(L,
 			func_traits<
 				R (Args...),
 				index_tuple<sizeof...(Args)>,
 				is_all_pod<Args...>::value
 			>::call(L, fp)
 		);
-		return 1;
 	}
 };
 
@@ -728,14 +736,13 @@ struct call<R (T::*)(Args...)> {
 		typedef R (T::*FP)(Args...);
 		T *cls = lj_get_class<T>(L, 1, false);
 		auto fp = *(FP*)lua_touserdata(L, lua_upvalueindex(1));
-		StackOps<R>::Push(L,
+		return StackOps<R>::Push(L,
 			func_traits<
 				R (T::*)(Args...),
 				index_tuple<sizeof...(Args)>,
 				is_all_pod<Args...>::value
 			>::call(L, cls, fp)
 		);
-		return 1;
 	}
 };
 
@@ -762,14 +769,13 @@ struct call<R (T::*)(Args...) const> {
 		typedef R (T::*FP)(Args...) const;
 		const T *cls = lj_get_class<T>(L, 1, true);
 		auto fp = *(FP*)lua_touserdata(L, lua_upvalueindex(1));
-		StackOps<R>::Push(L,
+		return StackOps<R>::Push(L,
 			func_traits<
 				R (T::*)(Args...) const,
 				index_tuple<sizeof...(Args)>,
 				is_all_pod<Args...>::value
 			>::call(L, cls, fp)
 		);
-		return 1;
 	}
 };
 
@@ -846,8 +852,7 @@ template <typename T>
 struct get_variable<T*> {
 	static int cfunction(lua_State *L, funcdata data) {
 		auto p = data.as<T*>();
-		StackOps<T>::Push(L, *p);
-		return 1;
+		return StackOps<T>::Push(L, *p);
 	}
 };
 
@@ -855,8 +860,7 @@ template <typename T>
 struct get_variable<T (*)()> {
 	static int cfunction(lua_State *L, funcdata data) {
 		auto p = data.as<T (*)()>();
-		StackOps<T>::Push(L, (*p)());
-		return 1;
+		return StackOps<T>::Push(L, (*p)());
 	}
 };
 
@@ -911,8 +915,7 @@ struct get_property<U T::*> {
 	static int cfunction(lua_State *L, funcdata data) {
 		const T *cls = get_class_unchecked<T>(L, 1);
 		auto mp = data.as<U T::*>();
-		StackOps<U>::Push(L, cls->*mp);
-		return 1;
+		return StackOps<U>::Push(L, cls->*mp);
 	}
 };
 
@@ -921,8 +924,7 @@ struct get_property<U (*)(const T&)> {
 	static int cfunction(lua_State *L, funcdata data) {
 		const T *cls = get_class_unchecked<T>(L, 1);
 		auto mp = data.as<U (*)(const T&)>();
-		StackOps<U>::Push(L, (*mp)(*cls));
-		return 1;
+		return StackOps<U>::Push(L, (*mp)(*cls));
 	}
 };
 
@@ -931,8 +933,7 @@ struct get_property<U (*)(const T*)> {
 	static int cfunction(lua_State *L, funcdata data) {
 		const T *cls = get_class_unchecked<T>(L, 1);
 		auto mp = data.as<U (*)(const T*)>();
-		StackOps<U>::Push(L, (*mp)(cls));
-		return 1;
+		return StackOps<U>::Push(L, (*mp)(cls));
 	}
 };
 
@@ -941,8 +942,7 @@ struct get_property<U (T::*)() const> {
 	static int cfunction(lua_State *L, funcdata data) {
 		const T *cls = get_class_unchecked<T>(L, 1);
 		auto mp = data.as<U (T::*)() const>();
-		StackOps<U>::Push(L, (cls->*mp)());
-		return 1;
+		return StackOps<U>::Push(L, (cls->*mp)());
 	}
 };
 
@@ -1304,19 +1304,20 @@ static inline Error *get_last_if_error(T&&, Args &&...args) {
 // Recursive push helper
 //============================================================================
 
-static inline void recursive_push(lua_State*) {
+static inline int recursive_push(lua_State*) {
 	// no arguments
+	return 0;
 }
 
 template <typename T>
-static inline void recursive_push(lua_State *L, T &&arg) {
-	StackOps<T>::Push(L, std::forward<T>(arg));
+static inline int recursive_push(lua_State *L, T &&arg) {
+	return StackOps<T>::Push(L, std::forward<T>(arg));
 }
 
 template <typename T, typename ...Args>
-static inline void recursive_push(lua_State *L, T &&arg, Args &&...args) {
-	StackOps<T>::Push(L, std::forward<T>(arg));
-	recursive_push(L, std::forward<Args>(args)...);
+static inline int recursive_push(lua_State *L, T &&arg, Args &&...args) {
+	const int n = StackOps<T>::Push(L, std::forward<T>(arg));
+	return n + recursive_push(L, std::forward<Args>(args)...);
 }
 
 //============================================================================
@@ -1387,10 +1388,12 @@ public:
 			stack_pop p(L, 1);
 			lua_rawgeti(L, LUA_REGISTRYINDEX, tableref);
 			lua_rawgeti(L, LUA_REGISTRYINDEX, ref);
+			// TODO: Make sure Push returns 1
 			StackOps<T>::Push(L, std::forward<T>(r));
 			lua_settable(L, -3);
 		} else {
 			luaL_unref(L, LUA_REGISTRYINDEX, ref);
+			// TODO: Make sure Push returns 1
 			StackOps<T>::Push(L, std::forward<T>(r));
 			ref = luaL_ref(L, LUA_REGISTRYINDEX);
 		}
@@ -1426,12 +1429,12 @@ public:
 	template <typename ...Args>
 	Ref operator()(Args &&...args) const {
 		Error *err = get_last_if_error(std::forward<Args>(args)...);
-		int nargs = sizeof...(Args) - (err ? 1 : 0);
-		if (!err) err = &DefaultError;
+		if (!err)
+			err = &DefaultError;
 
 		Push(L);
-		recursive_push(L, std::forward<Args>(args)...);
-		int code = lua_pcall(L, nargs, 1, 0);
+		const int nargs = recursive_push(L, std::forward<Args>(args)...);
+		const int code = lua_pcall(L, nargs, 1, 0);
 		if (code != _INTERLUA_OK) {
 			err->Set(code, lua_tostring(L, -1));
 			lua_pop(L, 1); // pop the error message from the stack
@@ -1442,6 +1445,7 @@ public:
 
 	template <typename T>
 	Ref operator[](T &&key) const {
+		// TODO: make sure Push returns 1
 		StackOps<T>::Push(L, std::forward<T>(key));
 		int keyref = luaL_ref(L, LUA_REGISTRYINDEX);
 		Push(L);
@@ -1482,6 +1486,7 @@ public:
 	template <typename T>
 	void Append(T &&v) const {
 		Push(L);
+		// TODO: Make sure Push returns 1
 		StackOps<T>::Push(L, std::forward<T>(v));
 		luaL_ref(L, -2);
 		lua_pop(L, 1);
@@ -1514,6 +1519,7 @@ static inline Ref FromStack(lua_State *L, int index) {
 
 template <typename T>
 static inline Ref New(lua_State *L, T &&v) {
+	// TODO: Make sure Push returns 1
 	StackOps<T>::Push(L, std::forward<T>(v));
 	return {L, luaL_ref(L, LUA_REGISTRYINDEX)};
 }
@@ -1531,8 +1537,9 @@ static inline Ref Global(lua_State *L, const char *name) {
 #define _stack_ops_ref(T)								\
 template <>										\
 struct StackOps<T> {									\
-	static inline void Push(lua_State *L, const Ref &v) {				\
+	static inline int Push(lua_State *L, const Ref &v) {				\
 		v.Push(L);								\
+		return 1;								\
 	}										\
 	static inline void Check(lua_State *L, int narg, Error *err = &DefaultError) {	\
 		checkany(L, narg, err);							\
