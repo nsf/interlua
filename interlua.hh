@@ -556,15 +556,6 @@ _stack_ops_ignore_push(AbortError*&)
 
 #undef _stack_ops_ignore_push
 
-template <typename T>
-static inline T lj_check_and_get(lua_State *L, int index) {
-	ManualError merr;
-	Error *err = merr.Init();
-	StackOps<T>::Check(L, index, err);
-	merr.LJCheckAndDestroy(L);
-	return StackOps<T>::Get(L, index);
-}
-
 //============================================================================
 // Recursive check helper
 //============================================================================
@@ -879,7 +870,7 @@ template <typename T>
 struct set_variable<T*> {
 	static int cfunction(lua_State *L, funcdata data) {
 		auto p = data.as<T*>();
-		*p = lj_check_and_get<T>(L, 3);
+		*p = StackOps<T>::LJGet(L, 3);
 		return 0;
 	}
 };
@@ -888,7 +879,7 @@ template <typename T>
 struct set_variable<void (*)(T)> {
 	static int cfunction(lua_State *L, funcdata data) {
 		auto p = data.as<void (*)(T)>();
-		(*p)(lj_check_and_get<T>(L, 3));
+		(*p)(StackOps<T>::LJGet(L, 3));
 		return 0;
 	}
 };
@@ -965,7 +956,7 @@ struct set_property<U T::*> {
 	static int cfunction(lua_State *L, funcdata data) {
 		T *cls = get_class_unchecked<T>(L, 1);
 		auto mp = data.as<U T::*>();
-		cls->*mp = lj_check_and_get<U>(L, 3);
+		cls->*mp = StackOps<U>::LJGet(L, 3);
 		return 0;
 	}
 };
@@ -975,7 +966,7 @@ struct set_property<void (*)(T&, U)> {
 	static int cfunction(lua_State *L, funcdata data) {
 		T *cls = get_class_unchecked<T>(L, 1);
 		auto mp = data.as<void (*)(T&, U)>();
-		(*mp)(*cls, lj_check_and_get<U>(L, 3));
+		(*mp)(*cls, StackOps<U>::LJGet(L, 3));
 		return 0;
 	}
 };
@@ -985,7 +976,7 @@ struct set_property<void (*)(T*, U)> {
 	static int cfunction(lua_State *L, funcdata data) {
 		T *cls = get_class_unchecked<T>(L, 1);
 		auto mp = data.as<void (*)(T*, U)>();
-		(*mp)(cls, lj_check_and_get<U>(L, 3));
+		(*mp)(cls, StackOps<U>::LJGet(L, 3));
 		return 0;
 	}
 };
@@ -995,7 +986,7 @@ struct set_property<void (T::*)(U)> {
 	static int cfunction(lua_State *L, funcdata data) {
 		T *cls = get_class_unchecked<T>(L, 1);
 		auto mp = data.as<void (T::*)(U)>();
-		(cls->*mp)(lj_check_and_get<U>(L, 3));
+		(cls->*mp)(StackOps<U>::LJGet(L, 3));
 		return 0;
 	}
 };
