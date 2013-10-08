@@ -557,16 +557,11 @@ _stack_ops_ignore_push(AbortError*&)
 #undef _stack_ops_ignore_push
 
 template <typename T>
-static inline void lj_check(lua_State *L, int index) {
+static inline T lj_check_and_get(lua_State *L, int index) {
 	ManualError merr;
 	Error *err = merr.Init();
 	StackOps<T>::Check(L, index, err);
 	merr.LJCheckAndDestroy(L);
-}
-
-template <typename T>
-static inline T lj_check_and_get(lua_State *L, int index) {
-	lj_check<T>(L, index);
 	return StackOps<T>::Get(L, index);
 }
 
