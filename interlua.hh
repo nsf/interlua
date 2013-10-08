@@ -313,9 +313,7 @@ struct StackOps {
 	// cases (T& and const T&) or rvalue case (T), but in all cases
 	// we need pure T as a template parameter for many of the
 	// templates used here.
-	using PURE_T = typename std::remove_const<
-		typename std::remove_reference<T>::type
-	>::type;
+	using PURE_T = typename std::decay<T>::type;
 	using NOREF_T = typename std::remove_reference<T>::type;
 	static inline void Push(lua_State *L, T &&value) {
 		void *mem = lua_newuserdata(L, sizeof(UserdataValue<PURE_T>));
@@ -351,7 +349,7 @@ struct StackOps {
 // pointer cases are covered separately however
 template <typename T>
 struct StackOps<T*> {
-	using PURE_T = typename std::remove_const<T>::type;
+	using PURE_T = typename std::decay<T>::type;
 	static inline void Push(lua_State *L, T *value) {
 		void *mem = lua_newuserdata(L, sizeof(UserdataPointer<T>));
 		void *mt = std::is_const<T>::value ?
