@@ -1106,17 +1106,29 @@ void checkany(lua_State *L, int narg, Error *err) {
 }
 
 void checkinteger(lua_State *L, int narg, Error *err) {
+#if LUA_VERSION_NUM < 502
+	lua_Integer d = lua_tointeger(L, narg);
+	if (d == 0 && !lua_isnumber(L, narg))
+		tag_error(L, narg, LUA_TNUMBER, err);
+#else
 	int isnum;
 	lua_tointegerx(L, narg, &isnum);
 	if (!isnum)
 		tag_error(L, narg, LUA_TNUMBER, err);
+#endif
 }
 
 void checknumber(lua_State *L, int narg, Error *err) {
+#if LUA_VERSION_NUM < 502
+	lua_Number d = lua_tonumber(L, narg);
+	if (d == 0 && !lua_isnumber(L, narg))
+		tag_error(L, narg, LUA_TNUMBER, err);
+#else
 	int isnum;
 	lua_tonumberx(L, narg, &isnum);
 	if (!isnum)
 		tag_error(L, narg, LUA_TNUMBER, err);
+#endif
 }
 
 void checkstring(lua_State *L, int narg, Error *err) {
