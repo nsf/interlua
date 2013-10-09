@@ -1343,8 +1343,7 @@ class Ref {
 	int tableref = LUA_REFNIL;
 
 public:
-	// no point in having Ref without L
-	Ref() = delete;
+	Ref() = default;
 	Ref(lua_State *L): L(L) {}
 	Ref(lua_State *L, int ref): L(L), ref(ref) {}
 	Ref(lua_State *L, int ref, int tableref):
