@@ -11,6 +11,31 @@ void set_tester(int value) {
 	tester = value;
 }
 
+STF_TEST("global namespace") {
+	LUA();
+	InterLua::GlobalNamespaceMT(L).
+		Function("set", set_tester).
+		Variable("tester", &tester).
+		Variable("tester_ro", &tester, InterLua::ReadOnly).
+	End();
+	DO("set(10)");
+	STF_ASSERT(tester == 10);
+	DO("tester = 5");
+	STF_ASSERT(tester == 5);
+	DO("set(tester+1)");
+	STF_ASSERT(tester == 6);
+	DO("set(tester_ro+1)");
+	STF_ASSERT(tester == 7);
+	int fail = luaL_dostring(L, "tester_ro = 5");
+	if (!fail) {
+		STF_ERRORF("R/O variable should report an error on write");
+	} else {
+		lua_pop(L, 1);
+	}
+	STF_ASSERT(lua_gettop(L) == 0);
+	END();
+}
+
 STF_TEST("local namespace") {
 	LUA();
 	InterLua::GlobalNamespace(L).

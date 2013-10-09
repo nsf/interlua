@@ -893,6 +893,24 @@ void register_class_tables(lua_State *L, const char *name, const class_keys &key
 	_interlua_rawsetp(L, LUA_REGISTRYINDEX, keys.const_key);
 }
 
+void set_namespace_metatable(lua_State *L) {
+	if (lua_getmetatable(L, -1)) {
+		// if metatable is ours, we're done here
+		if (get_class_info(L, -1))
+			return;
+
+		// hostile metatable, we'll replace it
+		lua_pop(L, 1);
+	}
+
+	lua_pushvalue(L, -1);
+	lua_setmetatable(L, -2);
+
+	push_class_info(L, {nullptr, nullptr, nullptr});
+	set_common_metamethods(L);
+	lua_rawseti(L, -2, 1);
+}
+
 NSWrapper NSWrapper::Namespace(const char *name) {
 	rawgetfield(L, -1, name);
 	if (!lua_isnil(L, -1))
@@ -903,13 +921,7 @@ NSWrapper NSWrapper::Namespace(const char *name) {
 
 	// create an empty table and make it a metatable of itself
 	lua_newtable(L);
-	lua_pushvalue(L, -1);
-	lua_setmetatable(L, -2);
-
-	push_class_info(L, {nullptr, nullptr, false});
-	set_common_metamethods(L);
-
-	lua_rawseti(L, -2, 1);
+	set_namespace_metatable(L);
 
 	// namespace[name] = table
 	lua_pushvalue(L, -1);

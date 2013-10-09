@@ -158,6 +158,7 @@ struct class_keys {
 //   -2 class table
 //   -3 const table
 void register_class_tables(lua_State *L, const char *name, const class_keys &keys);
+void set_namespace_metatable(lua_State *L);
 
 template <typename T>
 struct ClassKey {
@@ -1144,11 +1145,12 @@ public:
 
 class NSWrapper {
 	lua_State *L = nullptr;
-	bool is_global = false;
+	bool has_mt = true;
 
 public:
 	NSWrapper() = delete;
-	NSWrapper(lua_State *L, bool is_global = false): L(L), is_global(is_global) {}
+	NSWrapper(lua_State *L): L(L) {}
+	NSWrapper(lua_State *L, bool has_mt): L(L), has_mt(has_mt) {}
 
 	NSWrapper Namespace(const char *name);
 	inline NSWrapper End() { lua_pop(L, 1); return {L}; }
@@ -1223,9 +1225,11 @@ public:
 
 	template <typename T>
 	NSWrapper &Variable(const char *name, T *p, VariableAccess va = ReadWrite) {
-		if (is_global) {
-			die("error: variable '%s' cannot be defined in the global namespace, "
-				"InterLua doesn't support variables in the global namespace",
+		if (!has_mt) {
+			die("error: variable '%s' cannot be defined in the global "
+				"namespace, unless global namespace was created "
+				"using GlobalNamespaceMT function, refer to the "
+				"manual for more details",
 				name);
 		}
 		variable(L, name, p, va == ReadWrite ? p : nullptr);
@@ -1237,9 +1241,11 @@ public:
 	// template type deduction will fail.
 	template <typename TG, typename TS = int>
 	NSWrapper &Property(const char *name, TG (*get)(), void (*set)(TS) = nullptr) {
-		if (is_global) {
-			die("error: property '%s' cannot be defined in the global namespace, "
-				"InterLua doesn't support properties in the global namespace",
+		if (!has_mt) {
+			die("error: property '%s' cannot be defined in the global "
+				"namespace, unless global namespace was created "
+				"using GlobalNamespaceMT function, refer to the "
+				"manual for more details",
 				name);
 		}
 		variable(L, name, get, set);
@@ -1249,11 +1255,18 @@ public:
 
 static inline NSWrapper GlobalNamespace(lua_State *L) {
 	_interlua_pushglobaltable(L);
-	return {L, true};
+	return {L, false};
+}
+
+static inline NSWrapper GlobalNamespaceMT(lua_State *L) {
+	_interlua_pushglobaltable(L);
+	set_namespace_metatable(L);
+	return {L};
 }
 
 static inline NSWrapper NewNamespace(lua_State *L) {
 	lua_newtable(L);
+	set_namespace_metatable(L);
 	return {L};
 }
 
