@@ -380,6 +380,30 @@ struct StackOps<T*> {
 	}
 };
 
+#define _stack_ops_tptr(TT)								\
+template <typename T>									\
+struct StackOps<TT> {									\
+	static inline int Push(lua_State *L, T *value) {				\
+		return StackOps<T*>::Push(L, value);					\
+	}										\
+	static inline void Check(lua_State *L, int index, Error *err = &DefaultError) {	\
+		StackOps<T*>::Check(L, index, err);					\
+	}										\
+	static inline T *Get(lua_State *L, int index) {					\
+		return StackOps<T*>::Get(L, index);					\
+	}										\
+	static inline T *LJGet(lua_State *L, int index) {				\
+		return StackOps<T*>::LJGet(L, index);					\
+	}										\
+};
+
+_stack_ops_tptr(T* const)
+_stack_ops_tptr(T*&)
+_stack_ops_tptr(T* const &)
+_stack_ops_tptr(T*&&)
+
+#undef _stack_ops_tptr
+
 template <>
 struct StackOps<std::nullptr_t> {
 	static inline int Push(lua_State *L, std::nullptr_t) {
@@ -916,7 +940,7 @@ struct get_property<U T::*> {
 	static int cfunction(lua_State *L, funcdata data) {
 		const T *cls = get_class_unchecked<T>(L, 1);
 		auto mp = data.as<U T::*>();
-		return StackOps<U>::Push(L, cls->*mp);
+		return StackOps<const U&>::Push(L, cls->*mp);
 	}
 };
 
@@ -925,7 +949,7 @@ struct get_property<U (*)(const T&)> {
 	static int cfunction(lua_State *L, funcdata data) {
 		const T *cls = get_class_unchecked<T>(L, 1);
 		auto mp = data.as<U (*)(const T&)>();
-		return StackOps<U>::Push(L, (*mp)(*cls));
+		return StackOps<const U&>::Push(L, (*mp)(*cls));
 	}
 };
 
@@ -934,7 +958,7 @@ struct get_property<U (*)(const T*)> {
 	static int cfunction(lua_State *L, funcdata data) {
 		const T *cls = get_class_unchecked<T>(L, 1);
 		auto mp = data.as<U (*)(const T*)>();
-		return StackOps<U>::Push(L, (*mp)(cls));
+		return StackOps<const U&>::Push(L, (*mp)(cls));
 	}
 };
 
@@ -943,7 +967,7 @@ struct get_property<U (T::*)() const> {
 	static int cfunction(lua_State *L, funcdata data) {
 		const T *cls = get_class_unchecked<T>(L, 1);
 		auto mp = data.as<U (T::*)() const>();
-		return StackOps<U>::Push(L, (cls->*mp)());
+		return StackOps<const U&>::Push(L, (cls->*mp)());
 	}
 };
 
@@ -1069,6 +1093,7 @@ public:
 
 	template <typename FP>
 	CWrapper &Function(const char *name, FP fp) {
+		// TODO: check if FP belongs to this class
 		*(FP*)lua_newuserdata(L, sizeof(fp)) = fp;
 		lua_pushcclosure(L, call<FP>::cfunction, 1);
 		if (is_const_member_function<FP>::value) {
@@ -1135,6 +1160,13 @@ public:
 		// and then add it to the table for quick lookup
 		rawsetfield(L, -2, name);
 
+		return *this;
+	}
+
+	template <typename U>
+	CWrapper &StaticValue(const char *name, U &&v) {
+		StackOps<U>::Push(L, std::forward<U>(v));
+		rawsetfield(L, -2, name);
 		return *this;
 	}
 };
