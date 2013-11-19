@@ -4,7 +4,6 @@
 #include <cstdlib>
 #include <cstring>
 #include <cstdarg>
-#include <unordered_map>
 #include <memory>
 
 namespace InterLua {
