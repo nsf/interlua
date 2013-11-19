@@ -891,7 +891,7 @@ struct get_property<U T::*> {
 	static inline int cfunction(lua_State *L) {
 		auto mp = *(G*)lua_touserdata(L, lua_upvalueindex(1));
 		T *cls = lj_get_class<T>(L, 1, true);
-		return StackOps<Decay<U>>::Push(L, cls->*mp);
+		return StackOps<Decay<const U&>>::Push(L, cls->*mp);
 	}
 };
 
@@ -901,7 +901,7 @@ struct get_property<U (*)(const T&)> {
 	static inline int cfunction(lua_State *L) {
 		auto mp = *(G*)lua_touserdata(L, lua_upvalueindex(1));
 		const T *cls = lj_get_class<T>(L, 1, true);
-		return StackOps<Decay<U>>::Push(L, (*mp)(*cls));
+		return StackOps<Decay<const U&>>::Push(L, (*mp)(*cls));
 	}
 };
 
@@ -911,7 +911,7 @@ struct get_property<U (*)(const T*)> {
 	static inline int cfunction(lua_State *L) {
 		auto mp = *(G*)lua_touserdata(L, lua_upvalueindex(1));
 		const T *cls = lj_get_class<T>(L, 1, true);
-		return StackOps<Decay<U>>::Push(L, (*mp)(cls));
+		return StackOps<Decay<const U&>>::Push(L, (*mp)(cls));
 	}
 };
 
@@ -921,7 +921,7 @@ struct get_property<U (T::*)() const> {
 	static inline int cfunction(lua_State *L) {
 		auto mp = *(G*)lua_touserdata(L, lua_upvalueindex(1));
 		const T *cls = lj_get_class<T>(L, 1, true);
-		return StackOps<Decay<U>>::Push(L, (cls->*mp)());
+		return StackOps<Decay<const U&>>::Push(L, (cls->*mp)());
 	}
 };
 
