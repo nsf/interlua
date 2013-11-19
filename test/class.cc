@@ -32,9 +32,9 @@ STF_TEST("basic random use") {
 			return Vec3(2, 4, 6)
 		end
 		function vectest(v)
-			x = v.x
-			y = v.y
-			z = v.z
+			x = v:x()
+			y = v:y()
+			z = v:z()
 		end
 		x = 0
 		y = 0
@@ -79,14 +79,14 @@ STF_TEST("const protection") {
 	End();
 	const char *init = R"*****(
 		function mutate(v)
-			v.x = 5
-			v.y = 6
-			v.z = 7
+			v:x(5)
+			v:y(6)
+			v:z(7)
 		end
 		function mutate2(v)
-			v.x = -1
-			v.y = -2
-			v.z = -3
+			v:x(-1)
+			v:y(-2)
+			v:z(-3)
 		end
 		function retself(v)
 			return v
@@ -187,17 +187,17 @@ STF_TEST("properties") {
 			Property("foo_ro", &Foo::get_foo).
 		End().
 	End();
-	DO("f = Foo(3); f.foo = f.foo + 4");
+	DO("f = Foo(3); f:foo(f:foo() + 4)");
 	{
 		Foo f = InterLua::Global(L, "f");
 		STF_ASSERT(f.foo == 7);
 	}
-	DO("f = Foo(-1); f.foo = f.foo_ro - 2");
+	DO("f = Foo(-1); f:foo(f:foo_ro() - 2)");
 	{
 		Foo f = InterLua::Global(L, "f");
 		STF_ASSERT(f.foo == -3);
 	}
-	int fail = luaL_dostring(L, "f = Foo(100); f.foo_ro = 500");
+	int fail = luaL_dostring(L, "f = Foo(100); f:foo_ro(500)");
 	if (!fail) {
 		STF_ERRORF("R/O property should report an error on write access");
 	} else {
@@ -205,10 +205,10 @@ STF_TEST("properties") {
 	}
 	const char *init = R"*****(
 		function mutate(f)
-			f.foo = 10
+			f:foo(10)
 		end
 		function mutate2(f)
-			f.foo = 20
+			f:foo(20)
 		end
 	)*****";
 	DO(init);
@@ -265,12 +265,12 @@ STF_TEST("proxy properties") {
 			Property("pfoo", proxy_get_foo_ptr, proxy_set_foo_ptr).
 		End().
 	End();
-	DO("f = Foo(3); f.rfoo = f.rfoo + 4");
+	DO("f = Foo(3); f:rfoo(f:rfoo() + 4)");
 	{
 		Foo f = InterLua::Global(L, "f");
 		STF_ASSERT(f.foo == 7);
 	}
-	DO("f = Foo(7); f.pfoo = f.pfoo - 1");
+	DO("f = Foo(7); f:pfoo(f:pfoo() - 1)");
 	{
 		Foo f = InterLua::Global(L, "f");
 		STF_ASSERT(f.foo == 6);

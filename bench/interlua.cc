@@ -55,8 +55,8 @@ for i = 0, N do
 	local obj = VarSetGet()
 	local t0 = os.clock()
 	for i = 1, times do
-		obj.n = i
-		if obj.n ~= i then
+		obj:n(i)
+		if obj:n() ~= i then
 			error("failed")
 		end
 	end
