@@ -40,17 +40,17 @@ struct StackOps<std::tuple<Args...>> {
 	}
 };
 
-#define _stack_ops_tuple(T1, T2)					\
+#define _stack_ops_tuple(T)						\
 template <typename ...Args>						\
-struct StackOps<T1> {							\
-	static inline int Push(lua_State *L, T2 v) {			\
-		return recursive_tuple_push(L, std::forward<T2>(v));	\
+struct StackOps<T> {							\
+	static inline int Push(lua_State *L, T v) {			\
+		return recursive_tuple_push(L, std::forward<T>(v));	\
 	}								\
 };
 
-_stack_ops_tuple(std::tuple<Args...>&, std::tuple<Args...>&)
-_stack_ops_tuple(std::tuple<Args...>&&, std::tuple<Args...>&&)
-_stack_ops_tuple(const std::tuple<Args...>&, const std::tuple<Args...>&)
+_stack_ops_tuple(std::tuple<Args...>&)
+_stack_ops_tuple(std::tuple<Args...>&&)
+_stack_ops_tuple(const std::tuple<Args...>&)
 
 #undef _stack_ops_tuple
 

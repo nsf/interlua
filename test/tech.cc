@@ -493,22 +493,22 @@ STF_TEST("StackOps<lua_State*>") {
 
 #define _stack_ops_check(T, arg)			\
 do {							\
-	StackOps<T>::Push(L, arg);			\
-	StackOps<T&>::Push(L, arg);			\
-	StackOps<const T&>::Push(L, arg);		\
+	StackOps<Decay<T>>::Push(L, arg);		\
+	StackOps<Decay<T&>>::Push(L, arg);		\
+	StackOps<Decay<const T&>>::Push(L, arg);	\
 	lua_setglobal(L, "c");				\
 	lua_setglobal(L, "b");				\
 	lua_setglobal(L, "a");				\
 	DO("assert(a == b and a == c)");		\
 	lua_getglobal(L, "a");				\
-	StackOps<T>::Check(L, -1);			\
-	T a = StackOps<T>::Get(L, -1);			\
+	StackOps<Decay<T>>::Check(L, -1);		\
+	T a = StackOps<Decay<T>>::Get(L, -1);		\
 	lua_getglobal(L, "b");				\
-	StackOps<T&>::Check(L, -1);			\
-	T b = StackOps<T&>::Get(L, -1);			\
+	StackOps<Decay<T&>>::Check(L, -1);		\
+	T b = StackOps<Decay<T&>>::Get(L, -1);		\
 	lua_getglobal(L, "c");				\
-	StackOps<const T&>::Check(L, -1);		\
-	T c = StackOps<const T&>::Get(L, -1);		\
+	StackOps<Decay<const T&>>::Check(L, -1);	\
+	T c = StackOps<Decay<const T&>>::Get(L, -1);	\
 	lua_pop(L, 3);					\
 	STF_ASSERT(a == b && a == c && a == arg);	\
 } while (0)
@@ -609,8 +609,8 @@ STF_TEST("_stack_ops_ignore_push") {
 	StackOps<AbortError*>::Push(L, nullptr);
 	Error *e = nullptr;
 	AbortError *ae = nullptr;
-	StackOps<Error*&>::Push(L, e);
-	StackOps<AbortError*&>::Push(L, ae);
+	StackOps<Decay<Error*&>>::Push(L, e);
+	StackOps<Decay<AbortError*&>>::Push(L, ae);
 	STF_ASSERT(lua_gettop(L) == 0);
 	END();
 }
